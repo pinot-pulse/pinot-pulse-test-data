@@ -1,0 +1,8 @@
+boto3
+aws-wsgi
+flask
+moto
+pynamodb
+pytest
+pytest-dotenv
+pytz

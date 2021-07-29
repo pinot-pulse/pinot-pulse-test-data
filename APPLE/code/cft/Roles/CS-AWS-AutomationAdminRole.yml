@@ -1,0 +1,93 @@
+AWSTemplateFormatVersion: "2010-09-09"
+# Description of what this CloudFormation Template is going to produce
+Description: AWS CloudFormation Template to create the IAM role and policies required to execute  Automation
+
+#===============================
+# Mappings:
+# Provide mapping as roles are global
+# and we need to reference them cross regionally.
+#===============================
+Mappings:
+  RoleMap:
+    Global:
+      RoleName: 'CS-AWS-AutomationAdminRole'
+      SSMAMIAutomationMasterAccessPolicyName: 'CS-AWS-AutomationAdminRole-ManagedPolicy'
+  AccountMappings:
+    AccountRoles:
+      Roles:
+      - arn:aws:iam::243383093692:role/CS-AWS-AutomationExecutionRole ### ADD MORE ACCOUNTS & EXECUTION ROLES
+
+#===============================
+# Conditions:
+# Define conditions that can be used to launch certain resources.
+#===============================
+Conditions:
+  # If the region is us-west-2 then create the Role, otherwise use the Mapped RoleName and export it so that subsequent templates can use the import.
+  CreateRole: !Equals [ !Ref 'AWS::Region', 'us-west-2' ]
+
+#===============================
+# Resources:
+# Define Resources that will be launched via this template
+#===============================
+Resources:
+  CS-AWS-AutomationMasterAccessPolicyName:
+    Type: "AWS::IAM::ManagedPolicy"
+    Condition: CreateRole
+    Properties:
+      ManagedPolicyName: !FindInMap [ RoleMap, Global, CS-AWS-AutomationMasterAccessPolicyName ]
+      Description: IAM Policy that allows to run the automation to encrypt.
+      Path: "/"
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Action: "*"
+            Resource: "*"
+          - Effect: "Allow"
+            Action:
+              - "sts:AssumeRole"
+            Resource: !FindInMap [AccountMappings, AccountRoles, Roles]
+
+  #-----------------------------
+  # SSMAMIAutomationAccess ReadOnly Role
+  #-----------------------------
+  CS-AWS-MasterAccessRole:
+    Type: AWS::IAM::Role
+    Condition: CreateRole
+    Properties:
+      RoleName: !FindInMap [ RoleMap, Global, RoleName ]
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: "*"
+            Action: sts:AssumeRole
+      Path: /
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/ReadOnlyAccess'
+        - !Ref CS-AWS-AutomationMasterAccessPolicyName
+
+#===============================
+# Outputs:
+# Specify any outputs for the stack.
+#===============================
+Outputs:
+  CS-AWS-AutomationAdminRole:
+    Description: "The IAM Role Name used by SERVICE to trigger Automation in other accounts."
+    Value: !FindInMap [ RoleMap, Global, RoleName ]
+    Export:
+      Name: !FindInMap [ RoleMap, Global, RoleName ]
+
+  CS-AWS-AutomationAdminRoleArn:
+    Description: "The IAM Role ARN for CS-AWS-AutomationAdminRole."
+    Value: !Join ['', ['arn:aws:iam::', !Ref 'AWS::AccountId', ':role/', !FindInMap [ RoleMap, Global, RoleName ]]]
+    Export:
+      Name: !Join ['-', [!FindInMap [ RoleMap, Global, RoleName ], 'ARN']]
+
+  CS-AutomationMasterAccessPolicyArn:
+    Description: "The ARN of the IAM Manged Policy that was created for CS-AWS-AutomationAdminRole."
+    Condition: CreateRole
+    Value: !Join ['', ['arn:aws:iam::', !Ref 'AWS::AccountId', ':policy/', !FindInMap [ RoleMap, Global, CS-AutomationMasterAccessPolicyName ]]]
+    Export:
+      Name: !Join ['-', [!FindInMap [ RoleMap, Global, CS-AWS-AutomationMasterAccessPolicyName ], 'ARN' ]]

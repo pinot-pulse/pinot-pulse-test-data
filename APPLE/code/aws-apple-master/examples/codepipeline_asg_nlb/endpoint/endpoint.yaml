@@ -1,0 +1,54 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: AIS Customer Test Stack - Endpoint Stage
+
+Parameters:
+  EnclaveId:
+    Description: 'AWS Account ID of the enclave where we should advertise the service'
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /AIS/AccountSetup/EnclaveId
+  NLBStackName:
+    Type: String
+    Description: The name of the NLB Stack
+
+Resources:
+  EndpointService:
+    Type: AWS::EC2::VPCEndpointService
+    Properties:
+      NetworkLoadBalancerArns:
+        - Fn::ImportValue:
+            Fn::Sub: "${NLBStackName}-ELB-Name"
+      AcceptanceRequired: False
+
+  EndpointServicePermission:
+    Type: AWS::EC2::VPCEndpointServicePermissions
+    Properties:
+      ServiceId: !Ref 'EndpointService'
+      AllowedPrincipals:
+        - !Sub 'arn:aws:iam::${EnclaveId}:root'
+
+# The Interface Endpoint, which goes into the AIS account
+  AISVpcEndpoint:
+    DependsOn: EndpointServicePermission
+    Type: Custom::VpcEndpointRequestor
+    Properties:
+      ServiceToken: !ImportValue ais-vpc-endpoint-requestor-arn
+      EndpointServiceID: !Ref EndpointService
+      ip_permissions:
+        - from_port: 8080
+          to_port: 8080
+          ip_ranges:
+            - cidr_ip: 17.0.0.0/8
+              description: AppleDesktop
+
+Outputs:
+  EndpointServiceId:
+    Description: VPC Endpoint Service ID
+    Value:
+      Ref: EndpointService
+    Export:
+      Name: !Sub "${AWS::StackName}-VPCE-SVC-ID"
+  AISVpcEndpointDNSName:
+    Description: The VPC Endpoint DNS Name
+    Value: !GetAtt AISVpcEndpoint.dnsname
+    Export:
+      Name: !Sub "${AWS::StackName}-VPCE-DNSName"

@@ -1,0 +1,13 @@
+# Template for fixed "common" settings for aws cli setup.
+# The special value "SKIP" means the script will not prompt for input for that option.
+#
+# You can find specific values for Account IDs and role names at:
+#    https://portal.aws.ais.apple.com/console-access
+
+appleconnect_username=<username>
+mascot_role=<role>
+aws_dev_account_id=<id>
+aws_test_account_id=<id>
+aws_prod_account_id=<id>
+profile_prefix=SKIP
+use_aws_ps1=true

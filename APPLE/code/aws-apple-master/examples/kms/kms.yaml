@@ -1,0 +1,96 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: Creates a KMS key and attaches a policy similar to the default policy.
+
+Parameters:
+  KeyAlias:
+    Type: String
+    Description: Alias of the key
+  KeyAdministratorRoleArn:
+    Type: CommaDelimitedList
+    Default: ''
+    Description: ARN of the principal adminstrating the key
+  KeyUserRoleArn:
+    Type: CommaDelimitedList
+    Default: ''
+    Description: ARN of the user principal role using the key
+  KeySystemUserRoleArn:
+    Type: CommaDelimitedList
+    Default: ''
+    Description: ARN of the service role (e.g. EC2, Lambda) using the key
+
+Resources:
+  MyKey:
+    Type: AWS::KMS::Key
+    Properties:
+      EnableKeyRotation: true
+      KeyPolicy:
+        Id: DefaultKmsPolicy
+        Version: '2012-10-17'
+        Statement:
+        - Sid: Enable IAM User Permissions
+          Effect: Allow
+          Principal:
+            AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+          Action: kms:*
+          Resource: "*"
+        - Sid: Allow access for Key Administrators
+          Effect: Allow
+          Principal:
+            AWS:
+              Ref: KeyAdministratorRoleArn
+          Action:
+          - kms:Create*
+          - kms:Describe*
+          - kms:Enable*
+          - kms:List*
+          - kms:Put*
+          - kms:Update*
+          - kms:Revoke*
+          - kms:Disable*
+          - kms:Get*
+          - kms:Delete*
+          - kms:TagResource
+          - kms:UntagResource
+          - kms:ScheduleKeyDeletion
+          - kms:CancelKeyDeletion
+          Resource: "*"
+        - Sid: Allow use of the key
+          Effect: Allow
+          Principal:
+            AWS:
+              Ref: KeyUserRoleArn
+          Action:
+          - kms:Encrypt
+          - kms:Decrypt
+          - kms:ReEncrypt*
+          - kms:GenerateDataKey*
+          - kms:DescribeKey
+          Resource: "*"
+        - Sid: Allow attachment of persistent resources
+          Effect: Allow
+          Principal:
+            AWS:
+              Ref: KeySystemUserRoleArn
+          Action:
+          - kms:CreateGrant
+          - kms:ListGrants
+          - kms:RevokeGrant
+          Resource: "*"
+          Condition:
+            Bool:
+              kms:GrantIsForAWSResource: 'true'
+  myKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub alias/${KeyAlias}
+      TargetKeyId:
+        Ref: MyKey
+
+Outputs:
+  KeyID:
+    Description: Key ID
+    Value:
+      Ref: MyKey
+    Export:
+      Name: MyKey

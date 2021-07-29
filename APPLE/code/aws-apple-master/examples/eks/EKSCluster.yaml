@@ -1,0 +1,130 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Amazon EKS - Cluster"
+
+Parameters:
+  EKSClusterName:
+    Type: String
+    MinLength: 3
+
+  KubernetesVersion:
+    Type: String
+    Default: "1.18"
+    AllowedValues:
+      - "1.18"
+      - "1.17"
+      - "1.16"
+      - "1.15"
+
+  DenaliEnabled:
+    Type: String
+    Default: false
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "EKS Cluster"
+        Parameters:
+          - EKSClusterName
+          - KubernetesVersion
+          - DenaliEnabled
+
+Conditions:
+  IsDenaliEnabled: !Equals [!Ref DenaliEnabled, "true"]
+
+Resources:
+  ClusterControlPlaneSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Cluster communication with worker nodes
+      VpcId: !ImportValue ais-provided-vpc-VPCID
+      SecurityGroupEgress:
+        - Description: Cluster communication with worker nodes
+          CidrIp: 0.0.0.0/0
+          IpProtocol: "-1"
+          FromPort: 0
+          ToPort: 65535
+
+  EKSCluster:
+    Type: AWS::EKS::Cluster
+    Properties:
+      Name: !Ref EKSClusterName
+      RoleArn:
+        Fn::ImportValue: !Sub "${EKSClusterName}-iam-stack-EKSServiceRoleARN"
+      Version: !Ref KubernetesVersion
+      ResourcesVpcConfig:
+        SecurityGroupIds:
+          - !GetAtt ClusterControlPlaneSecurityGroup.GroupId
+        SubnetIds: !If
+          - IsDenaliEnabled
+          - - "{{resolve:ssm:/GNCS/0/Vpcs/0/denali-provided-private-subnet/0/Id:1}}"
+            - "{{resolve:ssm:/GNCS/0/Vpcs/0/denali-provided-private-subnet/1/Id:1}}"
+            - "{{resolve:ssm:/GNCS/0/Vpcs/0/denali-provided-private-subnet/2/Id:1}}"
+          - - !ImportValue ais-provided-vpc-PrivSubnet1
+            - !ImportValue ais-provided-vpc-PrivSubnet2
+            - !ImportValue ais-provided-vpc-PrivSubnet3
+      EncryptionConfig:
+        - Provider:
+            KeyArn: !GetAtt EKSEncryptionKey.Arn
+          Resources:
+            - secrets
+
+  EKSEncryptionKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: Key used by EKS to encrypt PV
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: 2012-10-17
+        Id: key-default-1
+        Statement:
+          - Sid: Allow administration of the key
+            Effect: Allow
+            Principal:
+              AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+            Action: kms:*
+            Resource: "*"
+          - Sid: Allow access for EKSServiceRole role
+            Effect: Allow
+            Principal:
+              AWS:
+                - Fn::ImportValue: !Sub "${EKSClusterName}-iam-stack-EKSServiceRoleARN"
+            Action:
+              - kms:Decrypt
+              - kms:DescribeKey
+              - kms:Encrypt
+              - kms:GenerateDataKey*
+              - kms:ReEncrypt*
+            Resource: "*"
+          - Sid: Allow attachment of persistent resources
+            Effect: Allow
+            Principal:
+              AWS:
+                - Fn::ImportValue: !Sub "${EKSClusterName}-iam-stack-EKSServiceRoleARN"
+            Action:
+              - kms:CreateGrant
+            Resource: "*"
+            Condition:
+              Bool:
+                kms:GrantIsForAWSResource: true
+      Tags:
+        - Key: !Sub kubernetes.io/cluster/${EKSClusterName}
+          Value: "owned"
+
+Outputs:
+  ClusterControlPlaneSecurityGroup:
+    Export:
+      Name: !Sub "${AWS::StackName}-ClusterControlPlaneSecurityGroup"
+    Value: !Ref ClusterControlPlaneSecurityGroup
+  EKSClusterName:
+    Export:
+      Name: !Sub "${AWS::StackName}-EKSCluster"
+    Value: !Ref EKSCluster
+  EKSClusterEndpoint:
+    Export:
+      Name: !Sub "${AWS::StackName}-EKSClusterEndpoint"
+    Value: !GetAtt EKSCluster.Endpoint
+  EKSEncryptionKey:
+    Export:
+      Name: !Sub "${AWS::StackName}-EKSEncryptionKey"
+    Value: !GetAtt EKSEncryptionKey.Arn

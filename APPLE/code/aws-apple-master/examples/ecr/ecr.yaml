@@ -1,0 +1,54 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: ECR Template
+Parameters:
+  RepositoryName:
+    Type: String
+    Description: Repository Name
+  PowerUserRoleARN:
+    Type: CommaDelimitedList
+    Description: List of Power User Role ARN who can read/write to Amazon ECR, but cannot delete repositories or change the policy documents applied to them.
+  ReadOnlyRoleARN:
+    Type: CommaDelimitedList
+    Description: List of Read Only Role ARN who can list/pull images from Amazon ECR
+Resources:
+  MyRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Ref RepositoryName
+      RepositoryPolicyText:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: PowerUser
+            Effect: Allow
+            Principal:
+              AWS: !Ref PowerUserRoleARN
+            Action:
+              - "ecr:GetAuthorizationToken"
+              - "ecr:BatchCheckLayerAvailability"
+              - "ecr:GetDownloadUrlForLayer"
+              - "ecr:GetRepositoryPolicy"
+              - "ecr:DescribeRepositories"
+              - "ecr:ListImages"
+              - "ecr:DescribeImages"
+              - "ecr:BatchGetImage"
+              - "ecr:InitiateLayerUpload"
+              - "ecr:UploadLayerPart"
+              - "ecr:CompleteLayerUpload"
+              - "ecr:PutImage"
+          - Sid: ReadyOnly
+            Effect: Allow
+            Principal:
+              AWS: !Ref ReadOnlyRoleARN
+            Action:
+              - "ecr:GetAuthorizationToken"
+              - "ecr:BatchCheckLayerAvailability"
+              - "ecr:GetDownloadUrlForLayer"
+              - "ecr:GetRepositoryPolicy"
+              - "ecr:DescribeRepositories"
+              - "ecr:ListImages"
+              - "ecr:DescribeImages"
+              - "ecr:BatchGetImage"
+
+Outputs:
+  RepositoryArn:
+    Value: !GetAtt MyRepository.Arn

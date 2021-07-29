@@ -1,0 +1,178 @@
+---
+# Run this playbook by doing the following on an instance:
+#     ansible-playbook --connection=local -i "localhost," /tmp/artifact/playbooks/configure_instances.yaml
+
+- hosts: all
+  environment:
+    HTTP_PROXY: http://proxy.config.pcp.local:3128
+    HTTPS_PROXY: https://proxy.config.pcp.local:3128
+    http_proxy: http://proxy.config.pcp.local:3128
+    https_proxy: https://proxy.config.pcp.local:3128
+
+  tasks:
+  - name: Yum update everything!
+    yum:
+      name: '*'
+      state: latest
+    become: yes
+
+  - name: Yum install the 'Development tools' package group
+    yum:
+      name: "@Development tools"
+      state: present
+    become: yes
+
+  - name: Yum Install the rest of the packages
+    yum:
+      name:
+        - python3-devel
+        - python3-pip
+        - amazon-linux-extras
+        - ruby-devel
+        - libxml2
+        - libxml2-devel
+        - libxslt
+        - libxslt-devel
+        - patch
+        - redhat-rpm-config
+        - sqlite-devel
+    become: yes
+
+  - name: Install Ruby
+    command: amazon-linux-extras install -y ruby2.4=2.4.4
+    become: yes
+
+  - name: Install Ruby Dependencies
+    command: gem install rdoc rake builder bundler
+    become: yes
+
+  # rails versions higher than 4.0 require ruby 2.5 which is not availabe in the amazon-linux-extras/yum repo
+  - name: Install Ruby on Rails
+    command: gem install -p https://proxy.config.pcp.local:3128 rails -v 4.0 --no-ri --no-rdoc
+    become: yes
+
+  - name: Create www group
+    group:
+      name: www
+      state: present
+    become: yes
+
+  - name: Create www user
+    user:
+      name: www
+      home: /var/www/
+      createhome: yes
+      group: www
+    become: yes
+
+  # Steps required to create a Rails sample app from scratch
+  #
+  # - name: Remove app directory
+  #   file:
+  #     path: /var/www/app
+  #     state: absent
+  #   become: yes
+  # - name: Recreate app directory
+  #   file:
+  #     path: /var/www/app
+  #     state: directory
+  #     owner: www
+  #     group: www
+  #   become: yes
+  # - name: Create New Rails sample app
+  #   command: /usr/local/bin/rails new /var/www/app
+  #   become: yes
+  #   become_user: www
+  # - name: Add missing gem - bigdecimal
+  #   lineinfile:
+  #     path: /var/www/app/Gemfile
+  #     line: "gem 'bigdecimal'"
+  # - name: Add missing gem - execjs
+  #   lineinfile:
+  #     path: /var/www/app/Gemfile
+  #     line: "gem 'execjs'"
+  # - name: Add missing gem - therubyracer
+  #   lineinfile:
+  #     path: /var/www/app/Gemfile
+  #     line: "gem 'therubyracer', :platforms => :ruby"
+
+  # If you already have a Ruby 2.4.4 app, you can drop it in the
+  # two_instances_vpce/app/ folder, delete the above sample app creation,
+  # and uncomment the block below to install it.
+  #
+  - name: Create Rails sample app
+    command: cp -r /tmp/artifact/app /var/www/
+    become: yes
+
+  - name: Fix app permissions
+    file:
+      path: /var/www/
+      state: directory
+      recurse: yes
+      mode: 0755
+      owner: www
+      group: www
+    become: yes
+
+  - name: Run App Ruby Bundle
+    command: /usr/local/bin/bundle install
+    args:
+      chdir: /var/www/app/
+    become: yes
+    become_user: www
+
+  # Use the rails server (via puma) in a systemd service
+  # - name: Run Ruby Server
+  #   command: /usr/local/bin/rails server -p 8080 -b 0.0.0.0 -d
+  #   args:
+  #     chdir: /var/www/app/
+  #   become: yes
+  #   become_user: www
+  #
+  - name: Install app init script (rails)
+    copy:
+      src: /tmp/artifact/playbooks/files/app.service
+      dest: /etc/systemd/system/app.service
+      owner: root
+      group: root
+      mode: 0755
+    become: yes
+
+  - name: Enable and start app service
+    systemd:
+      name: app
+      enabled: yes
+      state: restarted
+    become: yes
+
+  # Uncomment this if you want to run Nginx, but note that you will need to
+  # customize the configuration to your app.
+  #
+  # - name: Install Nginx
+  #   command: amazon-linux-extras install -y nginx1.12
+  #   become: yes
+  #
+  # - name: Install Nginx Configuration
+  #   copy:
+  #     src: /tmp/artifact/playbooks/files/nginx.conf
+  #     dest: /etc/nginx/nginx.conf
+  #     owner: root
+  #     group: root
+  #     mode: 0755
+  #   become: yes
+  #
+  # - name: Install App Configuration
+  #   copy:
+  #     src: /tmp/artifact/playbooks/files/app.conf
+  #     dest: /etc/nginx/conf.d/app.conf
+  #     owner: root
+  #     group: root
+  #     mode: 0755
+  #   become: yes
+  #
+  # - name: Enable and start app service
+  #   systemd:
+  #     name: nginx
+  #     enabled: yes
+  #     state: restarted
+  #   become: yes

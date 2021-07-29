@@ -1,0 +1,121 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: MSK@Apple - Client
+
+Parameters:
+  InstanceType:
+    Description: Instance type to launch
+    Type: String
+    Default: t3.small
+  ImageId:
+    Description: AMI Id
+    Type: "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>"
+    Default: "/AIS/AMI/AmazonLinux2/Id"
+  AZNumber:
+    Description: The Index which defines the Availability Zone to use (1, 2, or 3)
+    Type: Number
+    AllowedValues: [1, 2, 3]
+    Default: 1
+  KafkaSecurityGroup:
+    Description: SecurityGroup ID for Kafka
+    Type: String
+  KafkaClusterArn:
+    Description: Cluster ARN
+    Type: String
+
+Resources:
+  EC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      IamInstanceProfile: !Ref InstanceProfile
+      ImageId: !Ref ImageId
+      InstanceType: !Ref InstanceType
+      SecurityGroupIds:
+        - !ImportValue ais-shared-services-sg-SS-SG
+        - !Ref InstanceSecurityGroup
+        - !Ref KafkaSecurityGroup
+      SubnetId:
+        Fn::ImportValue: !Sub ais-provided-vpc-PrivSubnet${AZNumber}
+      Tags:
+        - Key: Name
+          Value: !Ref AWS::StackName
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          set -eux
+
+          # Configure proxies
+          /opt/tools/bin/configure_proxy.sh
+          set -a && source /etc/environment
+          cat << EOF > /etc/profile.d/proxy.sh
+          export HTTPS_PROXY=$HTTP_PROXY
+          export HTTP_PROXY=$HTTP_PROXY
+          export NO_PROXY=$NO_PROXY
+          export http_proxy=$HTTP_PROXY
+          export https_proxy=$HTTP_PROXY
+          export no_proxy=$NO_PROXY
+          EOF
+
+          # Configure aws cli
+          TOKEN=$(curl -sX PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+          REGION=$(curl -sH "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/dynamic/instance-identity/document | awk -F\" '/region/ {print $4}')
+          aws configure set default.region $REGION
+
+          # Download Kafka cli tools
+          yum install -y java-1.8.0
+          cd /root
+          curl -Ok https://archive.apache.org/dist/kafka/2.2.1/kafka_2.12-2.2.1.tgz
+          tar -xzf kafka_2.12-2.2.1.tgz
+
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub "${AWS::StackName} SG"
+      VpcId: !ImportValue ais-provided-vpc-VPCID
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: !ImportValue ais-provided-vpc-VPCCIDR
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref InstanceRole
+
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:aws:iam::${AWS::AccountId}:policy/AISSystemLogsPolicy
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: AllowMSKDescribeCluster
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - kafka:ListClusters
+                  - kafka:DescribeCluster
+                Resource: !Ref KafkaClusterArn
+      PermissionsBoundary: !Sub "arn:aws:iam::${AWS::AccountId}:policy/ais-permissions-boundaries"
+
+Outputs:
+  InstanceID:
+    Description: Instance ID
+    Value: !Ref EC2Instance
+    Export:
+      Name: !Sub "${AWS::StackName}-InstanceID"
+  InstanceRoleArn:
+    Description: Instance Role Arn
+    Value: !GetAtt InstanceRole.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-InstanceRoleArn"

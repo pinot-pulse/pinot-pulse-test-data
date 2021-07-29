@@ -1,0 +1,8 @@
+aws_profile = "dev"
+aws_region  = "us-west-2"
+
+stack_name          = "example"
+cluster_engine      = "redis"
+port                = 6397
+engine_version      = "5.0.6"
+cache_node_type     = "cache.m3.medium"

@@ -1,0 +1,11 @@
+boto3
+apig-wsgi
+flask
+flask-bootstrap
+moto
+pynamodb
+pytest
+pytest-dotenv
+pytz
+Flask-AppleConnect>=0.4.2
+

@@ -1,0 +1,171 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: MSK@Apple - Cluster
+
+Parameters:
+  ClusterName:
+    Description: The name of the cluster
+    Type: String
+    MinLength: 3
+
+  InstanceType:
+    Description: The type of Amazon EC2 instances to use for brokers.
+    Type: String
+    Default: kafka.t3.small
+    AllowedValues:
+      - kafka.t3.small
+      - kafka.m5.large
+      - kafka.m5.xlarge
+      - kafka.m5.2xlarge
+      - kafka.m5.4xlarge
+      - kafka.m5.12xlarge
+      - kafka.m5.24xlarge
+
+  VolumeSize:
+    Description: The size in GiB of the EBS volume for the data drive on each broker node
+    Type: Number
+    Default: 100
+
+  EnhancedMonitoring:
+    Description: Specifies the level of monitoring for the MSK cluster
+    Type: String
+    Default: DEFAULT
+    AllowedValues:
+      - DEFAULT
+      - PER_BROKER
+      - PER_TOPIC_PER_BROKER
+
+  KafkaVersion:
+    Description: The version of Apache Kafka
+    Type: String
+    Default: 2.2.1
+    AllowedValues:
+      - 1.1.1
+      - 2.2.1
+      - 2.3.1
+      - 2.4.1
+
+  NumberOfBrokerNodes:
+    Description: The number of broker nodes you want in the Amazon MSK cluster
+    Type: Number
+    Default: 3
+
+Resources:
+  Cluster:
+    Type: AWS::MSK::Cluster
+    Properties:
+      BrokerNodeGroupInfo:
+        BrokerAZDistribution: DEFAULT
+        ClientSubnets:
+          - !ImportValue ais-provided-vpc-PrivSubnet1
+          - !ImportValue ais-provided-vpc-PrivSubnet2
+          - !ImportValue ais-provided-vpc-PrivSubnet3
+        InstanceType: !Ref InstanceType
+        SecurityGroups:
+          - !Ref ClusterSecurityGroup
+        StorageInfo:
+          EBSStorageInfo:
+            VolumeSize: !Ref VolumeSize
+      # ClientAuthentication:
+      #   Tls:
+      #     CertificateAuthorityArnList:
+      #       - List of ACM Certificate Authority ARNs.
+      ClusterName: !Ref ClusterName
+      # ConfigurationInfo:
+      #   Arn: String
+      #   Revision: 0
+      EncryptionInfo:
+        EncryptionInTransit:
+          ClientBroker: TLS
+          InCluster: true
+        # EncryptionAtRest:
+        #   DataVolumeKMSKeyId: The ARN of the AWS KMS key for encrypting data at rest. If you don't specify a KMS key, MSK creates one for you and uses it on your behalf.
+      EnhancedMonitoring: !Ref EnhancedMonitoring
+      KafkaVersion: !Ref KafkaVersion
+      LoggingInfo:
+        BrokerLogs:
+          CloudWatchLogs:
+            Enabled: true
+            LogGroup: !Ref ClusterLogGroup
+      NumberOfBrokerNodes: !Ref NumberOfBrokerNodes
+
+  ClusterLogGroup:
+    Type: "AWS::Logs::LogGroup"
+    Properties:
+      LogGroupName: !Sub "/aws/msk/${ClusterName}"
+      RetentionInDays: 90
+
+  ClusterSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub "${AWS::StackName} MSK Cluster Security Group"
+      VpcId: !ImportValue ais-provided-vpc-VPCID
+
+  TopicCreatorSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub "${AWS::StackName} Topic Creator Security Group"
+      VpcId: !ImportValue ais-provided-vpc-VPCID
+
+  ProducerConsumerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub "${AWS::StackName} Producer and Consumer Security Group"
+      VpcId: !ImportValue ais-provided-vpc-VPCID
+
+  ZooKeeperIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Ingress for ZooKeeper
+      IpProtocol: tcp
+      FromPort: 2181
+      ToPort: 2181
+      SourceSecurityGroupId: !Ref TopicCreatorSecurityGroup
+      GroupId: !Ref ClusterSecurityGroup
+
+  ZooKeeperEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      Description: Egress for ZooKeeper
+      IpProtocol: tcp
+      FromPort: 2181
+      ToPort: 2181
+      DestinationSecurityGroupId: !Ref ClusterSecurityGroup
+      GroupId: !Ref TopicCreatorSecurityGroup
+
+  KafkaBrokerIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Ingress for KafkaBrokers
+      IpProtocol: tcp
+      FromPort: 9094
+      ToPort: 9094
+      SourceSecurityGroupId: !Ref ProducerConsumerSecurityGroup
+      GroupId: !Ref ClusterSecurityGroup
+
+  KafkaBrokerEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      Description: Egress for KafkaBrokers
+      IpProtocol: tcp
+      FromPort: 9094
+      ToPort: 9094
+      DestinationSecurityGroupId: !Ref ClusterSecurityGroup
+      GroupId: !Ref ProducerConsumerSecurityGroup
+
+Outputs:
+  Cluster:
+    Export:
+      Name: !Sub "${AWS::StackName}-Cluster"
+    Value: !Ref Cluster
+  ClusterSecurityGroup:
+    Export:
+      Name: !Sub "${AWS::StackName}-MSK-SG"
+    Value: !Ref ClusterSecurityGroup
+  TopicCreatorSecurityGroup:
+    Export:
+      Name: !Sub "${AWS::StackName}-TC-SG"
+    Value: !Ref TopicCreatorSecurityGroup
+  ProducerConsumerSecurityGroup:
+    Export:
+      Name: !Sub "${AWS::StackName}-PC-SG"
+    Value: !Ref ProducerConsumerSecurityGroup

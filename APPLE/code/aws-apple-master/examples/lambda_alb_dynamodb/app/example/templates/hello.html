@@ -1,0 +1,23 @@
+{% extends "bootstrap/base.html" %}
+
+{% block title %}AWS@Apple Flask/Lambda Example{% endblock %}
+
+{% block styles %}
+    {{ super() }}
+    <link rel="stylesheet" href="styles.css">
+{% endblock %}
+
+{% block body %}
+
+{% include "nav-bar.html" %}
+
+<div class="container">
+    <h1>Hello {{ first }} {{ last }}!</h1>
+    <p>You are authorized to view this page based on membership in <a href="adir://groups/{{ group }}">adir://groups/{{ group }}</a>.</p>
+</div>
+
+{% include "footer.html" %}
+
+{{ super() }}
+
+{% endblock %}

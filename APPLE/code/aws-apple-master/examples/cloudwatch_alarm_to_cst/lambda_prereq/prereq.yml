@@ -1,0 +1,94 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Artifacts S3 bucket creation for Lambda
+
+Parameters:
+  BucketName:
+    Type: String
+    Description: 'bucket name'
+  IamRoles:
+    Type: List<String>
+    Description: List if IAM Roles who can use this Key.
+    Default: ""
+
+Conditions:
+  IamRoles: !Not [!Equals [!Join [",", !Ref IamRoles], ""]]
+  
+Resources:
+  KMSKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: KMS Key to Encrypt the S3 Bucket for Lambda Deployments
+      EnableKeyRotation: true
+      KeyPolicy:
+        Id: KeyPolicy
+        Version: "2012-10-17"
+        Statement:
+          - Sid: Enable IAM User Permissions
+            Effect: Allow
+            Principal:
+              AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+            Action: kms:*
+            Resource: "*"
+          - !If
+            - IamRoles
+            - Sid: Allow IAM Roles usage of the key
+              Effect: Allow
+              Principal:
+                AWS: !Ref IamRoles
+                Service: s3.amazonaws.com
+              Action:
+                - kms:Encrypt
+                - kms:Decrypt
+                - kms:ReEncrypt*
+                - kms:GenerateDataKey*
+                - kms:DescribeKey
+              Resource: "*"
+            - !Ref "AWS::NoValue"
+              
+  LambdaDeploymentBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Properties:
+      BucketName: !Ref BucketName
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !GetAtt KMSKey.Arn
+  LambdaDeploymentBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref LambdaDeploymentBucket
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: DenyUploadIfNotEncrypted
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource: !Sub 'arn:aws:s3:::${LambdaDeploymentBucket}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: false
+
+  UpdateS3VPCEndpoint:
+    Type: Custom::VpcEndpointUpdater
+    Properties:
+      ServiceToken: !ImportValue VpcEndpointUpdaterARN
+      VpcEndpointId: !ImportValue ais-provided-vpc-VPCS3Endpoint
+      Principal: '*'
+      Action: 's3:*'
+      Effect: 'Allow'
+      Resource: [
+        !GetAtt LambdaDeploymentBucket.Arn,
+        !Join [ "", [ !GetAtt LambdaDeploymentBucket.Arn, "/*" ] ]
+      ]
+
+Outputs:
+  ArtifactBucketName:
+    Description: Name of the Artifact Bucket
+    Value: !GetAtt LambdaDeploymentBucket.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-Lambda-Bucket-ARN"

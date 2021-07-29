@@ -1,0 +1,233 @@
+Description: "Creates the SageMaker resources to run a SageMaker notebook instance."
+
+Parameters:
+  # See Instance Types Here:
+  #   https://aws.amazon.com/sagemaker/pricing/instance-types/
+  InstanceType:
+    Type: String
+    Default: ml.t3.medium
+    Description: Enter the EC2 Instance type to create for the SageMaker notebook instance. Default is ml.t3.medium.
+
+  VolumeSize:
+    Type: Number
+    Default: 50
+    MinValue: 5
+    MaxValue: 16384
+    ConstraintDescription: Must be an integer between 5 (GB) and 16384 (16 TB).
+    Description: Enter the size of the EBS volume in GB.
+
+Resources:
+  SageMakerIamRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      # !! RoleName *Must* begin with 'AmazonSageMaker' !!
+      RoleName: "AmazonSageMaker-ExecutionRole-nb"
+      PermissionsBoundary: !Sub "arn:aws:iam::${AWS::AccountId}:policy/ais-permissions-boundaries"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: sagemaker.amazonaws.com
+            Action: sts:AssumeRole
+      Path: "/"
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/AmazonSageMakerFullAccess"
+
+  SageMakerEncryptionKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: Key used by EKS to encrypt PV
+      KeyPolicy:
+        Version: 2012-10-17
+        Id: key-default-1
+        Statement:
+          - Sid: Allow administration of the key
+            Effect: Allow
+            Principal:
+              AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+            Action: kms:*
+            Resource: "*"
+          - Sid: Allow access for SageMaker role
+            Effect: Allow
+            Principal:
+              AWS: !GetAtt SageMakerIamRole.Arn
+            Action:
+              - kms:Decrypt
+              - kms:DescribeKey
+              - kms:Encrypt
+              - kms:GenerateDataKey*
+              - kms:ReEncrypt*
+            Resource: "*"
+          - Sid: Allow attachment of persistent resources
+            Effect: Allow
+            Principal:
+              AWS: !GetAtt SageMakerIamRole.Arn
+            Action: kms:CreateGrant
+            Resource: "*"
+            Condition:
+              Bool:
+                kms:GrantIsForAWSResource: 'true'
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription:
+        Fn::Sub: "${AWS::StackName} SG"
+      VpcId:
+        Fn::ImportValue: ais-provided-vpc-VPCID
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp:
+            Fn::ImportValue: ais-provided-vpc-VPCCIDR
+
+  FastaiNbLifecycleConfig:
+    Type: "AWS::SageMaker::NotebookInstanceLifecycleConfig"
+    Properties:
+      OnCreate:
+        - Content:
+            Fn::Base64: |
+              #!/bin/bash
+              set -e
+              echo "Start running onCreate script (root section)"
+
+              # Obtain variables from metadata service
+              TOKEN=$(curl -sX PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+              MAC=$(curl -sH "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/network/interfaces/macs/ | head -n1 | tr -d '/')
+              VPCCIDR=$(curl -sH "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/network/interfaces/macs/$MAC/vpc-ipv4-cidr-block/)
+              REGION=$(curl -sH "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/dynamic/instance-identity/document | awk -F\" '/region/ {print $4}')
+
+              # Configure Proxies
+              whitelists=(
+                localhost
+                127.0.0.1
+                169.254.169.254
+                $VPCCIDR
+                10.100.0.0/16
+                .internal
+                .apple.com
+                .execute-api.$REGION.amazonaws.com
+                .s3.$REGION.amazonaws.com
+                .$REGION.eks.amazonaws.com
+                .$REGION.vpce.amazonaws.com
+                amazonlinux.$REGION.amazonaws.com
+                api.sagemaker.$REGION.amazonaws.com
+                cloudformation.$REGION.amazonaws.com
+                cloudtrail.$REGION.amazonaws.com
+                codebuild-fips.$REGION.amazonaws.com
+                codebuild.$REGION.amazonaws.com
+                config.$REGION.amazonaws.com
+                dynamodb.$REGION.amazonaws.com
+                ec2.$REGION.amazonaws.com
+                ec2messages.$REGION.amazonaws.com
+                elasticloadbalancing.$REGION.amazonaws.com
+                events.$REGION.amazonaws.com
+                kinesis.$REGION.amazonaws.com
+                kms.$REGION.amazonaws.com
+                logs.$REGION.amazonaws.com
+                monitoring.$REGION.amazonaws.com
+                runtime.sagemaker.$REGION.amazonaws.com
+                secretsmanager.$REGION.amazonaws.com
+                servicecatalog.$REGION.amazonaws.com
+                sns.$REGION.amazonaws.com
+                ssm.$REGION.amazonaws.com
+                ssmmessages.$REGION.amazonaws.com
+                sts.$REGION.amazonaws.com
+              )
+              HTTP_PROXY=http://proxy.config.pcp.local:3128
+              NO_PROXY=$(IFS=,; echo "${whitelists[*]}")
+
+              # Save proxy variables for future processes
+              cat << EOF > /home/ec2-user/SageMaker/.proxy.sh
+              export HTTPS_PROXY=$HTTP_PROXY
+              export HTTP_PROXY=$HTTP_PROXY
+              export NO_PROXY=$NO_PROXY
+              export http_proxy=$HTTP_PROXY
+              export https_proxy=$HTTP_PROXY
+              export no_proxy=$NO_PROXY
+              EOF
+
+              # Run onCreate script as ec2-user
+              sudo -H -i -u ec2-user bash << EOF
+              echo "Start running onCreate script (ec2-user section)"
+              set -ex
+
+              # Configure aws cli
+              aws configure set default.region $REGION
+              mv /home/ec2-user/.aws /home/ec2-user/SageMaker/.aws
+              ln -s /home/ec2-user/SageMaker/.aws /home/ec2-user/.aws
+
+              # Configure git
+              git config --global http.proxy $HTTP_PROXY
+              mv /home/ec2-user/.gitconfig /home/ec2-user/SageMaker/.gitconfig
+              ln -s /home/ec2-user/SageMaker/.gitconfig /home/ec2-user/.gitconfig
+
+              # Create symlinks to EBS volume
+              echo "Creating symlinks"
+              mkdir /home/ec2-user/SageMaker/.torch && ln -s /home/ec2-user/SageMaker/.torch /home/ec2-user/.torch
+              mkdir /home/ec2-user/SageMaker/.fastai && ln -s /home/ec2-user/SageMaker/.fastai /home/ec2-user/.fastai
+
+              # Clone the course notebooks
+              echo "Clone the course repo"
+              git clone https://github.com/fastai/course-v3.git /home/ec2-user/SageMaker/course-v3
+
+              echo "Finished running onCreate script"
+              EOF
+
+      OnStart:
+        - Content:
+            Fn::Base64: |
+              #!/bin/bash
+              set -e
+              echo "Start running onStart script (root section)"
+
+              # Configure Proxies
+              [ ! -L /etc/profile.d/proxy.sh ] && ln -s /home/ec2-user/SageMaker/.proxy.sh /etc/profile.d/proxy.sh
+              source /etc/profile.d/proxy.sh
+
+              # Run onStart script as ec2-user
+              sudo -H -i -u ec2-user bash << EOF
+              echo "Start running onStart script (ec2-user section)"
+              set -ex
+
+              # Create symlinks to EBS volume
+              echo "Creating symlinks"
+              [ ! -L "/home/ec2-user/.torch" ] && ln -s /home/ec2-user/SageMaker/.torch /home/ec2-user/.torch
+              [ ! -L "/home/ec2-user/.fastai" ] && ln -s /home/ec2-user/SageMaker/.fastai /home/ec2-user/.fastai
+              [ ! -L "/home/ec2-user/.gitconfig" ] && rm -rf /home/ec2-user/.gitconfig && ln -s /home/ec2-user/SageMaker/.gitconfig /home/ec2-user/.gitconfig
+              [ ! -L "/home/ec2-user/.aws" ] && rm -rf /home/ec2-user/.aws && ln -s /home/ec2-user/SageMaker/.aws /home/ec2-user/.aws
+
+              # Install jupyter nbextension
+              echo "Install jupyter nbextension"
+              source /home/ec2-user/anaconda3/bin/activate JupyterSystemEnv
+              pip install jupyter_contrib_nbextensions
+              jupyter contrib nbextensions install --user
+              deactivate
+              echo "Restarting jupyter notebook server"
+              pkill -f jupyter-notebook
+
+              echo "Getting latest version of fastai course"
+              pushd /home/ec2-user/SageMaker/course-v3
+              git pull
+              popd
+
+              echo "Finished running onStart script"
+              EOF
+
+  FastaiNotebookInstance:
+    Type: "AWS::SageMaker::NotebookInstance"
+    Properties:
+      InstanceType: !Ref InstanceType
+      LifecycleConfigName: !GetAtt FastaiNbLifecycleConfig.NotebookInstanceLifecycleConfigName
+      NotebookInstanceName: !Ref AWS::StackName
+      RoleArn: !GetAtt SageMakerIamRole.Arn
+      VolumeSizeInGB: !Ref VolumeSize
+      DirectInternetAccess: Disabled
+      RootAccess: Disabled
+      KmsKeyId: !Ref SageMakerEncryptionKey
+      SecurityGroupIds:
+        - Fn::ImportValue: ais-shared-services-sg-SS-SG
+        - Ref: SecurityGroup
+      SubnetId:
+        Fn::ImportValue: ais-provided-vpc-PrivSubnet1

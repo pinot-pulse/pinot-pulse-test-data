@@ -1,0 +1,343 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Amazon EKS - Node Group"
+
+Parameters:
+  EKSClusterName:
+    Type: String
+    MinLength: 3
+
+  IsDenaliEnabled:
+    Type: String
+    Default: false
+
+  IsManagedNodeGroup:
+    Type: String
+    Default: false
+
+  NodeImageId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /AIS/AMI/AmazonEKS18Linux/Id
+    Description: AMI id for the node instances.
+    AllowedValues:
+      - /AIS/AMI/AmazonEKS15Linux/Id
+      - /AIS/AMI/AmazonEKS15LinuxWithGpu/Id
+      - /AIS/AMI/AmazonEKS16Linux/Id
+      - /AIS/AMI/AmazonEKS16LinuxWithGpu/Id
+      - /AIS/AMI/AmazonEKS17Linux/Id
+      - /AIS/AMI/AmazonEKS17LinuxWithGpu/Id
+      - /AIS/AMI/AmazonEKS18Linux/Id
+      - /AIS/AMI/AmazonEKS18LinuxWithGpu/Id
+    ConstraintDescription: Select from available EKS images.
+
+  NodeInstanceType:
+    Description: EC2 instance type for the node instances (see https://github.com/aws/amazon-vpc-cni-k8s/blob/release-1.4/pkg/awsutils/vpc_ip_resource_limit.go for supported instances)
+    Type: String
+    Default: t3.medium
+
+  NodeAutoScalingGroupMinSize:
+    Description: Minimum size of Node Group ASG.
+    Type: Number
+    Default: 1
+
+  NodeAutoScalingGroupMaxSize:
+    Description: Maximum size of Node Group ASG. Set to at least 1 greater than NodeAutoScalingGroupDesiredCapacity.
+    Type: Number
+    Default: 3
+
+  NodeAutoScalingGroupDesiredCapacity:
+    Description: Desired capacity of Node Group ASG.
+    Type: Number
+    Default: 2
+
+  BootstrapArguments:
+    Description: Arguments to pass to the bootstrap script. See files/bootstrap.sh in https://github.com/awslabs/amazon-eks-ami
+    Type: String
+    Default: ""
+
+  NodeGroupName:
+    Description: Unique identifier for the Node Group.
+    Type: String
+    Default: workergroup
+
+Conditions:
+  IsDenaliEnabled: !Equals [!Ref IsDenaliEnabled, "true"]
+  IsManagedNodeGroup: !Equals [!Ref IsManagedNodeGroup, "true"]
+  IsNotManagedNodeGroup: !Not [!Equals [!Ref IsManagedNodeGroup, "true"]]
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: EKS Cluster
+        Parameters:
+          - EKSClusterName
+      - Label:
+          default: Worker Node Configuration
+        Parameters:
+          - NodeGroupName
+          - NodeAutoScalingGroupMinSize
+          - NodeAutoScalingGroupDesiredCapacity
+          - NodeAutoScalingGroupMaxSize
+          - NodeInstanceType
+          - NodeImageId
+          - BootstrapArguments
+          - IsDenaliEnabled
+          - IsManagedNodeGroup
+      - Label:
+          default: Worker Network Configuration
+
+Resources:
+  NodeSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for all nodes in the cluster
+      VpcId: !ImportValue ais-provided-vpc-VPCID
+      SecurityGroupEgress:
+        - Description: Worker nodes communication to any service
+          CidrIp: 0.0.0.0/0
+          IpProtocol: "-1"
+          FromPort: 0
+          ToPort: 65535
+      Tags:
+        - Key: !Sub "kubernetes.io/cluster/${EKSClusterName}"
+          Value: "owned"
+
+  NodeSecurityGroupIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Allow node to communicate with each other
+      GroupId: !Ref NodeSecurityGroup
+      SourceSecurityGroupId: !Ref NodeSecurityGroup
+      IpProtocol: "-1"
+      FromPort: 0
+      ToPort: 65535
+
+  NodeSecurityGroupFromControlPlaneIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Allow worker Kubelets and pods to receive communication from the cluster control plane
+      GroupId: !Ref NodeSecurityGroup
+      SourceSecurityGroupId:
+        Fn::ImportValue: !Sub ${EKSClusterName}-cluster-stack-ClusterControlPlaneSecurityGroup
+      IpProtocol: tcp
+      FromPort: 1025
+      ToPort: 65535
+
+  NodeSecurityGroupFromControlPlaneOn443Ingress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Allow pods running extension API servers on port 443 to receive communication from cluster control plane
+      GroupId: !Ref NodeSecurityGroup
+      SourceSecurityGroupId:
+        Fn::ImportValue: !Sub ${EKSClusterName}-cluster-stack-ClusterControlPlaneSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+
+  ControlPlaneEgressToNodeSecurityGroupOn443:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      Description: Allow the cluster control plane to communicate with pods running extension API servers on port 443
+      GroupId:
+        Fn::ImportValue: !Sub ${EKSClusterName}-cluster-stack-ClusterControlPlaneSecurityGroup
+      DestinationSecurityGroupId: !Ref NodeSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+
+  ClusterControlPlaneSecurityGroupIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Allow pods to communicate with the cluster API Server
+      GroupId:
+        Fn::ImportValue: !Sub ${EKSClusterName}-cluster-stack-ClusterControlPlaneSecurityGroup
+      SourceSecurityGroupId: !Ref NodeSecurityGroup
+      IpProtocol: tcp
+      ToPort: 443
+      FromPort: 443
+
+  ControlPlaneEgressToNodeSecurityGroup:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      Description: Allow the cluster control plane to communicate with worker Kubelet and pods
+      GroupId:
+        Fn::ImportValue: !Sub ${EKSClusterName}-cluster-stack-ClusterControlPlaneSecurityGroup
+      DestinationSecurityGroupId: !Ref NodeSecurityGroup
+      IpProtocol: tcp
+      FromPort: 1025
+      ToPort: 65535
+
+  ###########################################
+  ###      Unmanaged Worker Nodes         ###
+  ###########################################
+  NodeGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Condition: IsNotManagedNodeGroup
+    Properties:
+      DesiredCapacity: !Ref NodeAutoScalingGroupDesiredCapacity
+      LaunchConfigurationName: !Ref NodeLaunchConfig
+      MinSize: !Ref NodeAutoScalingGroupMinSize
+      MaxSize: !Ref NodeAutoScalingGroupMaxSize
+      VPCZoneIdentifier: !If
+        - IsDenaliEnabled
+        - - "{{resolve:ssm:/GNCS/0/Vpcs/0/denali-provided-private-subnet/0/Id:1}}"
+          - "{{resolve:ssm:/GNCS/0/Vpcs/0/denali-provided-private-subnet/1/Id:1}}"
+          - "{{resolve:ssm:/GNCS/0/Vpcs/0/denali-provided-private-subnet/2/Id:1}}"
+        - - !ImportValue ais-provided-vpc-PrivSubnet1
+          - !ImportValue ais-provided-vpc-PrivSubnet2
+          - !ImportValue ais-provided-vpc-PrivSubnet3
+      Tags:
+        - Key: Name
+          Value: !Sub "${EKSClusterName}-${NodeGroupName}-Node"
+          PropagateAtLaunch: true
+        - Key: !Sub "kubernetes.io/cluster/${EKSClusterName}"
+          Value: "owned"
+          PropagateAtLaunch: true
+        - Key: !Sub "k8s.io/cluster-autoscaler/${EKSClusterName}"
+          Value: "owned"
+          PropagateAtLaunch: true
+        - Key: k8s.io/cluster-autoscaler/enabled
+          Value: "true"
+          PropagateAtLaunch: true
+    UpdatePolicy:
+      AutoScalingRollingUpdate:
+        MinInstancesInService: 1
+        MaxBatchSize: 1
+
+  NodeLaunchConfig:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Condition: IsNotManagedNodeGroup
+    Properties:
+      AssociatePublicIpAddress: false
+      IamInstanceProfile:
+        Fn::ImportValue: !Sub ${EKSClusterName}-iam-stack-NodeInstanceProfileARN
+      ImageId: !Ref NodeImageId
+      InstanceType: !Ref NodeInstanceType
+      SecurityGroups:
+        - !Ref NodeSecurityGroup
+        - !ImportValue ais-shared-services-sg-SS-SG
+        - !If
+          - IsDenaliEnabled
+          - !ImportValue ais-provided-vpc-InsideVPCSecurtiyGroup
+          - !Ref AWS::NoValue
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -xe
+
+          # In us-east-1, our nodes come up with a domain of "us-east-1.compute.internal",
+          # but EKS thinks their domain is "ec2.internal" and uses that for nodenames.
+          # We have to make the system hostname match the kube nodename or kube-proxy
+          # won't be able to correctly identify the node it's running on.
+          if [[ ${AWS::Region} == us-east-1 ]]; then
+              hostnamectl set-hostname $(hostname | sed 's/\..*/.ec2.internal/')
+          fi
+
+          # Configure proxies
+          /opt/tools/bin/configure_proxy.sh
+          set -a && source /etc/environment
+
+          # See https://github.pie.apple.com/ais-cloud/aws-apple/issues/110#issuecomment-3463352
+          echo "net.ipv4.ip_forward = 1" > /etc/sysctl.d/99-eks.conf
+          sysctl --system
+
+          # Fix log permissions
+          cat << EOF > /etc/fix_log_permissions.sh
+          setfacl -R -m u:td-agent:rX /var/lib/docker/containers
+          EOF
+          chmod a+x /etc/fix_log_permissions.sh
+          crontab -l | { cat; echo "* * * * * /etc/fix_log_permissions.sh"; } | crontab -
+
+          # Bootstrap the cluster
+          /etc/eks/bootstrap.sh ${EKSClusterName} ${BootstrapArguments}
+          /opt/aws/bin/cfn-signal --exit-code $? \
+                  --stack  ${AWS::StackName} \
+                  --resource NodeGroup  \
+                  --region ${AWS::Region}
+
+  ###########################################
+  ###        Managed Worker Nodes         ###
+  ###########################################
+  ManagedNodeGroup:
+    Type: AWS::EKS::Nodegroup
+    Condition: IsManagedNodeGroup
+    Properties:
+      ClusterName: !Ref EKSClusterName
+      NodegroupName: !Ref NodeGroupName
+      ScalingConfig:
+        DesiredSize: !Ref NodeAutoScalingGroupDesiredCapacity
+        MaxSize: !Ref NodeAutoScalingGroupMaxSize
+        MinSize: !Ref NodeAutoScalingGroupMinSize
+      NodeRole:
+        Fn::ImportValue: !Sub ${EKSClusterName}-iam-stack-NodeInstanceRoleARN
+      LaunchTemplate:
+        Id: !Ref NodeLaunchTemplate
+        Version: !GetAtt NodeLaunchTemplate.LatestVersionNumber
+      ForceUpdateEnabled: true
+      Subnets: !If
+        - IsDenaliEnabled
+        - - "{{resolve:ssm:/GNCS/0/Vpcs/0/denali-provided-private-subnet/0/Id:1}}"
+          - "{{resolve:ssm:/GNCS/0/Vpcs/0/denali-provided-private-subnet/1/Id:1}}"
+          - "{{resolve:ssm:/GNCS/0/Vpcs/0/denali-provided-private-subnet/2/Id:1}}"
+        - - !ImportValue ais-provided-vpc-PrivSubnet1
+          - !ImportValue ais-provided-vpc-PrivSubnet2
+          - !ImportValue ais-provided-vpc-PrivSubnet3
+
+  NodeLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Condition: IsManagedNodeGroup
+    Properties:
+      LaunchTemplateData:
+        ImageId: !Ref NodeImageId
+        InstanceType: !Ref NodeInstanceType
+        MetadataOptions:
+          HttpEndpoint: enabled
+          HttpPutResponseHopLimit: 1
+          # cluster-autoscaler requires IMDSv1
+          HttpTokens: optional
+        SecurityGroupIds:
+          - !Ref NodeSecurityGroup
+          - !ImportValue ais-shared-services-sg-SS-SG
+          - !If
+            - IsDenaliEnabled
+            - !ImportValue ais-provided-vpc-InsideVPCSecurtiyGroup
+            - !Ref AWS::NoValue
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash -xe
+
+            # In us-east-1, our nodes come up with a domain of "us-east-1.compute.internal",
+            # but EKS thinks their domain is "ec2.internal" and uses that for nodenames.
+            # We have to make the system hostname match the kube nodename or kube-proxy
+            # won't be able to correctly identify the node it's running on.
+            if [[ ${AWS::Region} == us-east-1 ]]; then
+                hostnamectl set-hostname $(hostname | sed 's/\..*/.ec2.internal/')
+            fi
+
+            # Configure proxies
+            /opt/tools/bin/configure_proxy.sh
+            set -a && source /etc/environment
+
+            # See https://github.pie.apple.com/ais-cloud/aws-apple/issues/110#issuecomment-3463352
+            echo "net.ipv4.ip_forward = 1" > /etc/sysctl.d/99-eks.conf
+            sysctl --system
+
+            # Fix log permissions
+            cat << EOF > /etc/fix_log_permissions.sh
+            setfacl -R -m u:td-agent:rX /var/lib/docker/containers
+            EOF
+            chmod a+x /etc/fix_log_permissions.sh
+            crontab -l | { cat; echo "* * * * * /etc/fix_log_permissions.sh"; } | crontab -
+
+            # Bootstrap the cluster
+            /etc/eks/bootstrap.sh ${EKSClusterName} ${BootstrapArguments}
+            /opt/aws/bin/cfn-signal --exit-code $? \
+                    --stack  ${AWS::StackName} \
+                    --resource ManagedNodeGroup  \
+                    --region ${AWS::Region}
+
+Outputs:
+  NodeSecurityGroup:
+    Export:
+      Name: !Sub "${AWS::StackName}-NodeSecurityGroup"
+    Description: The security group for the node group
+    Value: !Ref NodeSecurityGroup

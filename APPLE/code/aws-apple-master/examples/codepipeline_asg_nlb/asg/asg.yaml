@@ -1,0 +1,280 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: AIS Customer Test Stack - AutoScaling Stage
+
+Parameters:
+  InstanceType:
+    Description: Instance type to launch
+    Type: String
+    Default: t3.micro
+  # Here you should set the image you want to use, we've created this example
+  # stack for Amazon Linux 2. If you'd like to see the AMIs available to you,
+  # checkout ...
+  ImageId:
+    Description: AMI Id
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    # This will use the latest AIS Image
+    Default: /AIS/AMI/AmazonLinux2/Id
+    # Alternatively, you can pin versions like this
+    #Type: String
+    #Default: "{{resolve:ssm:/AIS/AMI/AmazonLinux2/Id:20}}"
+  MinCount:
+    Type: Number
+    Default: 3
+  MaxCount:
+    Type: Number
+    Default: 3
+  S3ArtifactBucket:
+    Description: Name of Bucket for Artifacts
+    Type: String
+  S3ArtifactKey:
+    Default: multitier.zip
+    Description: The file name of the source artifact, such as myfolder/myartifact.zip
+    Type: String
+  NLBStackName:
+    Type: String
+    Description: The name of the NLB Stack
+
+Conditions:
+  isMinCountZero: !Equals [ !Ref MinCount, 0 ]
+
+Resources:
+
+############################
+# The AutoScaling Group
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      HealthCheckGracePeriod: 300
+      HealthCheckType: EC2
+      LaunchConfigurationName:
+        Ref: LaunchConfiguration
+      TargetGroupARNs:
+        - Fn::ImportValue:
+            Fn::Sub: "${NLBStackName}-TG-ID"
+      MaxSize: !Ref MaxCount
+      MetricsCollection:
+        - Granularity: 1Minute
+      MinSize: !Ref MinCount
+      Tags:
+        - Key: Name
+          Value:
+            Fn::Sub: "${AWS::StackName}-AutoScaling-Group"
+          PropagateAtLaunch: true
+      TerminationPolicies:
+        - OldestInstance
+      VPCZoneIdentifier:
+        - Fn::ImportValue: ais-provided-vpc-PrivSubnet1
+        - Fn::ImportValue: ais-provided-vpc-PrivSubnet2
+        - Fn::ImportValue: ais-provided-vpc-PrivSubnet3
+      # NotificationConfigurations:
+      # - TopicARN:
+      #     Fn::ImportValue:
+      #      customer-team-topic
+      #   NotificationTypes:
+      #   - autoscaling:EC2_INSTANCE_LAUNCH
+      #   - autoscaling:EC2_INSTANCE_LAUNCH_ERROR
+      #   - autoscaling:EC2_INSTANCE_TERMINATE
+      #   - autoscaling:EC2_INSTANCE_TERMINATE_ERROR
+
+    #
+    # NOTE: If your user-data script (or ansible playbook) takes more than
+    #       a couple minutes, you'll need to update the timouts below.
+    #
+    UpdatePolicy:
+      AutoScalingRollingUpdate:
+        MaxBatchSize: !Ref MinCount
+        MinInstancesInService: !If [isMinCountZero, 0, 1]
+        MinSuccessfulInstancesPercent: 70
+        PauseTime: PT10M
+#        SuspendProcesses:
+#          - List of processes
+        WaitOnResourceSignals: true
+    CreationPolicy:
+      AutoScalingCreationPolicy:
+        MinSuccessfulInstancesPercent: 100
+      ResourceSignal:
+        Count: !Ref MaxCount
+        Timeout: PT5M
+
+  ScaleOutPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+       AdjustmentType: ChangeInCapacity
+       AutoScalingGroupName:
+         Ref: AutoScalingGroup
+       Cooldown: "180"
+       ScalingAdjustment: 1
+
+  ScaleInPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+       AdjustmentType: ChangeInCapacity
+       AutoScalingGroupName:
+         Ref: AutoScalingGroup
+       Cooldown: "180"
+       ScalingAdjustment: -1
+
+  # NOTE: In this stack we are using network based scaling policies, however
+  # you can also use CPU/Memory based alarms. See:
+  # https://docs.aws.amazon.com/autoscaling/ec2/userguide/as-scale-based-on-demand.html
+  #
+  # Here we assume a max network throughput of 0.74 Gbps for the m5.large. We
+  # use 60% of max > for scaling out, and 20% < for scaling in.
+
+  NetworkAlarmHigh:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmActions:
+        - Ref: ScaleOutPolicy
+      AlarmDescription: 'Scale out if NetworkOut > 55500000 for 1 minute'
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value:
+            Ref: AutoScalingGroup
+      EvaluationPeriods: 1
+      MetricName: NetworkOut
+      Namespace: AWS/EC2
+      Period: 60
+      Statistic: Average
+      Threshold: 55500000
+
+  NetworkAlarmLow:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmActions:
+        - Ref: ScaleInPolicy
+      AlarmDescription: 'Scale-in if NetworkOut < 18500000 for 10 minutes'
+      ComparisonOperator: LessThanThreshold
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value:
+            Ref: AutoScalingGroup
+      EvaluationPeriods: 2
+      MetricName: NetworkOut
+      Namespace: AWS/EC2
+      Period: 300
+      Statistic: Maximum
+      Threshold: 18500000
+
+  LaunchConfiguration:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      IamInstanceProfile:
+        Ref: InstanceProfile
+      ImageId:
+        Ref: ImageId
+      InstanceType:
+        Ref: InstanceType
+      SecurityGroups:
+        - Ref: InstanceSecurityGroup
+        - Fn::ImportValue: ais-shared-services-sg-SS-SG
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -ex
+          teardown() {
+            exit_code=$?
+            [ -d "$tmpdir" ] && rm -rf $tmpdir
+            /opt/aws/bin/cfn-signal       \
+              -e $exit_code               \
+              --stack ${AWS::StackName}   \
+              --resource AutoScalingGroup \
+              --region ${AWS::Region}
+            trap - EXIT ERR INT TERM
+          }
+          trap teardown EXIT ERR INT TERM
+
+          # Configure proxies
+          /opt/tools/bin/configure_proxy.sh
+          set -a && source /etc/environment
+
+          # Bootstrap application installation here
+          TOKEN=$(curl -sX PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+          REGION=$(curl -sH "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/dynamic/instance-identity/document | jq -r .region)
+          export AWS_DEFAULT_REGION=$REGION
+          aws configure set region $REGION
+          aws s3 cp s3://${S3ArtifactBucket}/${S3ArtifactKey} /tmp
+          mkdir -p /tmp/artifact
+          sudo unzip -o /tmp/${S3ArtifactKey} -d /tmp/artifact
+          /usr/bin/ansible-playbook -v --connection=local -i "localhost," /tmp/artifact/playbooks/configure_asg.yaml
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - Ref: InstanceRole
+
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - Fn::Sub: "arn:aws:iam::${AWS::AccountId}:policy/AISSystemLogsPolicy"
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      PermissionsBoundary: !Sub 'arn:aws:iam::${AWS::AccountId}:policy/ais-permissions-boundaries'
+      Policies:
+        - PolicyName: ArtifactsRetrieval
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Sid: RetrievingArtifacts
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListObjects
+                Resource:
+                  Fn::Sub: "arn:aws:s3:::${S3ArtifactBucket}/*"
+              # - Sid: SecretsManagerGet
+              #   Effect: Allow
+              #   Action:
+              #     - secretsmanager:GetSecretValue
+              #   Resource:
+              #   - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:ais-multitier-app*'
+
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId:
+        Fn::ImportValue: ais-provided-vpc-VPCID
+      GroupDescription:
+        Fn::Sub: "${AWS::StackName} Instance Security Group"
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 443
+        ToPort: 443
+        CidrIp:
+          Fn::ImportValue: ais-provided-vpc-VPCCIDR
+      - IpProtocol: tcp
+        FromPort: 8080
+        ToPort: 8080
+        CidrIp:
+          Fn::ImportValue: ais-provided-vpc-VPCCIDR
+      SecurityGroupEgress:
+      - IpProtocol: tcp
+        FromPort: 443
+        ToPort: 443
+        CidrIp:
+          Fn::ImportValue: ais-provided-vpc-VPCCIDR
+      - IpProtocol: tcp
+        FromPort: 8080
+        ToPort: 8080
+        CidrIp:
+          Fn::ImportValue: ais-provided-vpc-VPCCIDR
+
+Outputs:
+  AutoScalinGroupName:
+    Description: Autoscaling group name
+    Value:
+      Ref: AutoScalingGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-ASGName"

@@ -1,0 +1,5 @@
+kind: ""
+apiversion: ""
+resources:
+- mandatory.yaml
+- service-nlb.yaml

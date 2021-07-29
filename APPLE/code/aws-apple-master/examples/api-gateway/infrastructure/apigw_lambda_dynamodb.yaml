@@ -1,0 +1,522 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: "An API Gateway, DynamoDB, and Lambda function example"
+
+Parameters:
+
+  PartitionKeyName:
+    Description: 'The attribute name that is used as the primary key for this table.'
+    Type: 'String'
+
+  PartitionKeyType:
+    Description: 'The data type of the attribute, S for string, N for numeric, B for binary'
+    Type: 'String'
+    Default: 'S'
+    AllowedValues:
+      - 'S'
+      - 'N'
+      - 'B'
+
+  ReadCapacityUnits:
+    Description: 'Sets the minimum number of consistent reads of items/second before DynamoDB balances the load.'
+    Type: 'String'
+    Default: '5'
+
+  WriteCapacityUnits:
+    Description: 'Sets the minimum number of consistent writes of items/second before DynamoDB balances the load.'
+    Type: 'String'
+    Default: '5'
+
+  MinReadCapacity:
+    Description: 'DynamoDB autoscaling min read capacity'
+    Type: 'String'
+    Default: '5'
+
+  MaxReadCapacity:
+    Description: 'DynamoDB autoscaling max read capacity'
+    Type: 'String'
+    Default: '15'
+
+  MinWriteCapacity:
+    Description: 'DynamoDB autoscaling min write capacity'
+    Type: 'String'
+    Default: '5'
+
+  MaxWriteCapacity:
+    Description: 'DynamoDB autoscaling max write capacity'
+    Type: 'String'
+    Default: '15'
+
+  WriteCapacityUnitsUtilizationTarget:
+    Description: 'Target write capacity utilization (in percent) that auto scaling tries to achieve'
+    Type: 'Number'
+    Default: '80'
+
+  ReadCapacityUnitsUtilizationTarget:
+    Description: 'Target read capacity utilization (in percent) that auto scaling tries to achieve'
+    Type: 'Number'
+    Default: '80'
+
+  SnsEmailSubscription:
+    Description: 'SNS Email subscription.'
+    Type: 'String'
+    AllowedPattern: "^[\\w-\\+]+(\\.[\\w]+)*@[\\w-]+(\\.[\\w]+)*(\\.[a-z]{2,})$|^$"
+
+  ApiGatewayName:
+    Type: 'String'
+    Description: 'The name of the API Gateway Rest API'
+    AllowedPattern: "^[a-zA-Z0-9]+[a-zA-Z0-9-]+[a-zA-Z0-9]+$"
+    Default: 'example-api'
+
+  SourceVpce:
+    Type: 'String'
+    Description: 'ID of the execute-api VPC Endpoint'
+
+  FlaskLambdaFunctionName:
+    Type: 'String'
+    Description: 'The name of the Lambda Function'
+    AllowedPattern: "^[a-zA-Z0-9]+[a-zA-Z0-9-]+[a-zA-Z0-9]+$"
+    Default: 'example-lambda'
+
+  FlaskLambdaRoleName:
+    Type: 'String'
+    Description: 'Name of the IAM Role used by the Lambda function'
+    Default: 'apig-flask-lambda-role'
+
+  FlaskLambdaS3Bucket:
+    Type: 'String'
+    Description: 'The name of the s3 bucket holding the example lambda zip'
+
+  FlaskLambdaS3Key:
+    Type: 'String'
+    Description: 'The name of the object representing the example lambda zip'
+
+Resources:
+###########################################################
+######################## DynamoDB #########################
+###########################################################
+
+  DynamoDBScalingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - 'application-autoscaling.amazonaws.com'
+            Action:
+              - 'sts:AssumeRole'
+      Path: '/'
+      Policies:
+        - PolicyName: dynamodbscalingpolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:DescribeTable
+                  - dynamodb:UpdateTable
+                  - cloudwatch:PutMetricAlarm
+                  - cloudwatch:DescribeAlarms
+                  - cloudwatch:DeleteAlarms
+                  - cloudwatch:GetMetricStatistics
+                  - cloudwatch:SetAlarmState
+                Resource: '*'
+      PermissionsBoundary: !Sub 'arn:aws:iam::${AWS::AccountId}:policy/ais-permissions-boundaries'
+
+  DynamoDBTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+        - AttributeName:
+            Ref: PartitionKeyName
+          AttributeType:
+            Ref: PartitionKeyType
+      KeySchema:
+        - AttributeName:
+            Ref: PartitionKeyName
+          KeyType: HASH
+      SSESpecification:
+        SSEEnabled: true
+      ProvisionedThroughput:
+        ReadCapacityUnits: !Ref ReadCapacityUnits
+        WriteCapacityUnits: !Ref WriteCapacityUnits
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  ReadCapacityScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MaxCapacity: !Ref MaxReadCapacity
+      MinCapacity: !Ref MinReadCapacity
+      ResourceId: !Join
+        - /
+        - - table
+          - Ref: DynamoDBTable
+      RoleARN: !GetAtt DynamoDBScalingRole.Arn
+      ScalableDimension: dynamodb:table:ReadCapacityUnits
+      ServiceNamespace: dynamodb
+
+  ReadScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: ReadAutoScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref ReadCapacityScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: !Ref ReadCapacityUnitsUtilizationTarget
+        ScaleInCooldown: 60
+        ScaleOutCooldown: 60
+        PredefinedMetricSpecification:
+          PredefinedMetricType: DynamoDBReadCapacityUtilization
+
+  WriteCapacityScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MaxCapacity:
+        Ref: MaxWriteCapacity
+      MinCapacity:
+        Ref: MinWriteCapacity
+      ResourceId: !Join
+        - /
+        - - table
+          - Ref: DynamoDBTable
+      RoleARN: !GetAtt 'DynamoDBScalingRole.Arn'
+      ScalableDimension: dynamodb:table:WriteCapacityUnits
+      ServiceNamespace: dynamodb
+
+  WriteScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: WriteAutoScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref WriteCapacityScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: !Ref WriteCapacityUnitsUtilizationTarget
+        ScaleInCooldown: 60
+        ScaleOutCooldown: 60
+        PredefinedMetricSpecification:
+          PredefinedMetricType: DynamoDBWriteCapacityUtilization
+
+  DynamoDBAlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: !Sub '${AWS::StackName} DynamoDB alarm topic'
+
+  DynamoDBAlarmSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Endpoint: !Ref SnsEmailSubscription
+      Protocol: email
+      TopicArn: !Ref DynamoDBAlarmTopic
+
+  ReadThrottleEventsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription:  DynamoDB Reads are throttled
+      MetricName: ReadThrottleEvents
+      Namespace: AWS/DynamoDB
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: TableName
+          Value: !Ref DynamoDBTable
+      AlarmActions:
+        - !Ref DynamoDBAlarmTopic
+      OKActions:
+        - !Ref DynamoDBAlarmTopic
+
+  WriteThrottleEventsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Writes are throttled
+      MetricName: WriteThrottleEvents
+      Namespace: AWS/DynamoDB
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: TableName
+          Value: !Ref DynamoDBTable
+      AlarmActions:
+        - !Ref DynamoDBAlarmTopic
+      OKActions:
+        - !Ref DynamoDBAlarmTopic
+
+###############################################################
+######################### API Gateway #########################
+###############################################################
+
+  ApiGatewayRestApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Description: An example REST API
+      EndpointConfiguration:
+        Types:
+          - PRIVATE
+        VpcEndpointIds:
+          - !Ref SourceVpce
+      FailOnWarnings: False
+      Name: !Ref ApiGatewayName
+      Policy:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Deny
+            Principal: '*'
+            Action: execute-api:Invoke
+            Resource: '*'
+            Condition:
+              StringNotEquals:
+                aws:sourceVpce: !Ref SourceVpce
+          - Effect: Allow
+            Principal: '*'
+            Action: execute-api:Invoke
+            Resource: '*'
+
+  ApiGatewayResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+      ParentId: !GetAtt 'ApiGatewayRestApi.RootResourceId'
+      PathPart: '{proxy+}'
+
+  ApiGatewayProxyANYMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+      ResourceId: !Ref ApiGatewayResource
+      HttpMethod: ANY
+      ApiKeyRequired: true
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub >-
+          arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FlaskLambdaFunction.Arn}/invocations
+
+  ApiGatewayApiKey:
+    Type: 'AWS::ApiGateway::ApiKey'
+    DependsOn:
+      - ApiGatewayDeployment
+    Properties:
+      Description: Example CloudFormation API Key V1
+      Enabled: true
+      StageKeys:
+        - RestApiId: !Ref ApiGatewayRestApi
+          StageName: dev
+
+  ApiGatewayDeployment:
+    DependsOn:
+      - ApiGatewayProxyANYMethod
+    Type: AWS::ApiGateway::Deployment
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+      StageName: dev
+      StageDescription:
+        AccessLogSetting:
+          DestinationArn: !GetAtt ApiGatewayStageLogGroup.Arn
+          Format: >-
+            $context.identity.sourceIp $context.identity.caller
+            $context.identity.user [$context.requestTime]
+            "$context.httpMethod $context.resourcePath $context.protocol"
+            $context.status $context.responseLength $context.requestId
+        CacheClusterEnabled: true
+        CacheTtlInSeconds: 10
+        CacheDataEncrypted: true
+        CachingEnabled: true
+        CacheClusterSize: '0.5'
+        DataTraceEnabled: true
+        MetricsEnabled: true
+        MethodSettings:
+          - CacheDataEncrypted: true
+            DataTraceEnabled: true
+            HttpMethod: '*'
+            ResourcePath: '/*'
+            LoggingLevel: INFO
+
+  ApiGatewayLoggingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - apigateway.amazonaws.com
+            Action: sts:AssumeRole
+      Path: '/'
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs'
+      PermissionsBoundary: !Sub 'arn:aws:iam::${AWS::AccountId}:policy/ais-permissions-boundaries'
+
+  ApiGatewayStageLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/apigateway/${ApiGatewayName}'
+      RetentionInDays: 90
+
+  ApiGatewayAccountConfig:
+    Type: AWS::ApiGateway::Account
+    Properties:
+      CloudWatchRoleArn: !GetAtt 'ApiGatewayLoggingRole.Arn'
+
+  ApiGatewaySecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription:
+        !Sub '${AWS::StackName} SG'
+      VpcId:
+        Fn::ImportValue: ais-provided-vpc-VPCID
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp:
+            Fn::ImportValue: ais-provided-vpc-VPCCIDR
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp:
+            Fn::ImportValue: ais-provided-vpc-VPCCIDR
+
+#####################################################
+############### Flask Lambda Function ###############
+#####################################################
+
+  FlaskLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        S3Key: !Ref FlaskLambdaS3Key
+        S3Bucket: !Ref FlaskLambdaS3Bucket
+      Description: !Sub '${AWS::StackName} Flask Lambda function'
+      FunctionName: !Ref FlaskLambdaFunctionName
+      Handler: example.wsgi.lambda_handler
+      MemorySize: 128
+      Role: !GetAtt 'FlaskLambdaIAMRole.Arn'
+      Runtime: python3.7
+      Timeout: 10
+      VpcConfig:
+        SecurityGroupIds:
+          - !ImportValue ais-shared-services-sg-SS-SG
+          - !ImportValue ais-provided-vpc-InsideVPCSecurtiyGroup
+        SubnetIds:
+        - !ImportValue ais-provided-vpc-PrivSubnet1
+        - !ImportValue ais-provided-vpc-PrivSubnet2
+        - !ImportValue ais-provided-vpc-PrivSubnet3
+      Environment:
+        Variables:
+          DYNAMODB_TABLE_NAME: !Ref DynamoDBTable
+
+  ApiInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref FlaskLambdaFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGatewayRestApi}/*/*/*'
+
+  FlaskLambdaIAMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref FlaskLambdaRoleName
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+      PermissionsBoundary: !Sub 'arn:aws:iam::${AWS::AccountId}:policy/ais-permissions-boundaries'
+      Policies:
+        - PolicyName: !Sub '${AWS::StackName}-flask-lambda-policy'
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Action:
+                  - ec2:CreateNetworkInterface
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DeleteNetworkInterface
+                Effect: Allow
+                Resource: '*'
+              - Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Effect: Allow
+                Resource:
+                  - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${FlaskLambdaFunctionName}:*'
+        - PolicyName: KMSKeyRetrieval
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Sid: RetrievingKMSKey
+                Effect: Allow
+                Action:
+                  - kms:Get*
+                  - kms:Decrypt
+                Resource:
+                  !Sub 'arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/*'
+        - PolicyName: DynamoDBAccess
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Sid: AccessingDynamoDB
+                Effect: Allow
+                Action:
+                  - dynamodb:BatchGetItem
+                  - dynamodb:BatchWriteItem
+                  - dynamodb:CreateTable
+                  - dynamodb:DeleteItem
+                  - dynamodb:DeleteTable
+                  - dynamodb:DescribeTable
+                  - dynamodb:GetItem
+                  - dynamodb:ListTables
+                  - dynamodb:PutItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                  - dynamodb:UpdateItem
+                  - dynamodb:UpdateTable
+                Resource:
+                  !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:*'
+
+  FlaskLambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${FlaskLambdaFunctionName}"
+      RetentionInDays: 90
+
+Outputs:
+  ApiGatewayRestApiId:
+    Description: ID of the ApiGateway REST API
+    Export:
+      Name: !Sub "${AWS::StackName}-Api-ID"
+    Value: !Ref ApiGatewayRestApi
+
+  ApiGatewayResourceId:
+    Description: ID of the ApiGateway Resource
+    Export:
+      Name: !Sub "${AWS::StackName}-Resource-ID"
+    Value: !Ref ApiGatewayResource
+
+  DynamoDBTable:
+    Description: DynamoDBTable
+    Export:
+      Name: !Sub "${AWS::StackName}-Table-Name"
+    Value: !Ref DynamoDBTable
+
+  DynamoDBTableARN:
+    Description: DynamoDBTableArn
+    Value: !GetAtt 'DynamoDBTable.Arn'
+
+  FlaskLambdaArn:
+    Value: !GetAtt 'FlaskLambdaFunction.Arn'

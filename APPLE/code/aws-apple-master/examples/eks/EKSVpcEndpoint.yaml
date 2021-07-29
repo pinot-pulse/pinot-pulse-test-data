@@ -1,0 +1,55 @@
+---
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Creates a vpclink
+
+Parameters:
+  LoadBalancer:
+    Description: ARN of the loadbalancer to export to PrivateLink
+    Type: String
+
+  EnclaveId:
+    Description: AWS Account ID of the enclave where we should advertise the service
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /AIS/AccountSetup/EnclaveId
+
+Resources:
+  # The VPC Endpoint Service
+  EndpointService:
+    Type: AWS::EC2::VPCEndpointService
+    Properties:
+      NetworkLoadBalancerArns:
+        - !Ref LoadBalancer
+      AcceptanceRequired: False
+  EndpointServicePermission:
+    Type: AWS::EC2::VPCEndpointServicePermissions
+    Properties:
+      ServiceId: !Ref EndpointService
+      AllowedPrincipals:
+        - !Sub "arn:aws:iam::${EnclaveId}:root"
+
+  # The Interface VPC Endpoint, which goes into the AIS account. The
+  # DNS name will be registered in the output value below.
+  AISVpcEndpoint:
+    Type: Custom::VpcEndpointRequestor
+    DependsOn: EndpointServicePermission
+    Properties:
+      ServiceToken: !ImportValue ais-vpc-endpoint-requestor-arn
+      EndpointServiceID: !Ref EndpointService
+      ip_permissions:
+        - from_port: 443
+          to_port: 443
+          ip_ranges:
+            - cidr_ip: 17.0.0.0/8
+              description: AppleDesktop
+
+Outputs:
+  EndpointServiceId:
+    Description: VPC Endpoint Service ID
+    Value: !Ref EndpointService
+    Export:
+      Name: !Sub "${AWS::StackName}-VPCE-SVC-ID"
+  PrivateLinkDNSName:
+    Description: The PrivateLink DNS Name
+    Value: !GetAtt AISVpcEndpoint.dnsname
+    Export:
+      Name: !Sub "${AWS::StackName}-VPCE-DNSName"

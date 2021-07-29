@@ -1,0 +1,46 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: ECS@Apple - VPC Endpoint
+
+Parameters:
+  EnclaveId:
+    Description: "AWS Account ID of the enclave where we should advertise the service"
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /AIS/AccountSetup/EnclaveId
+  LoadBalancer:
+    Type: String
+    Description: Name of the loadbalancer
+
+Resources:
+  EndpointService:
+    Type: AWS::EC2::VPCEndpointService
+    Properties:
+      AcceptanceRequired: False
+      NetworkLoadBalancerArns:
+        - !Ref LoadBalancer
+
+  EndpointServicePermission:
+    Type: AWS::EC2::VPCEndpointServicePermissions
+    Properties:
+      ServiceId: !Ref EndpointService
+      AllowedPrincipals:
+        - !Sub "arn:aws:iam::${EnclaveId}:root"
+
+  AISVpcEndpoint:
+    DependsOn: EndpointServicePermission
+    Type: Custom::VpcEndpointRequestor
+    Properties:
+      ServiceToken: !ImportValue ais-vpc-endpoint-requestor-arn
+      EndpointServiceID: !Ref EndpointService
+      ip_permissions:
+        - from_port: 443
+          to_port: 443
+          ip_ranges:
+            - cidr_ip: 17.0.0.0/8
+              description: AppleDesktop
+
+Outputs:
+  DNSName:
+    Description: The VPC Endpoint DNS Name
+    Value: !GetAtt AISVpcEndpoint.dnsname
+    Export:
+      Name: !Sub "${AWS::StackName}-DNSName"

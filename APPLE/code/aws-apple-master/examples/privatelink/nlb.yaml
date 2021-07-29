@@ -1,0 +1,114 @@
+
+AWSTemplateFormatVersion: "2010-09-09"
+Description: NLB with PrivateLink Template
+
+Parameters:
+  FrontendPort:
+    Type: String
+    Description: Port to associate with the load balancer (front end)
+    Default: 443
+  BackendPort:
+    Type: String
+    Description: Port to associate with the load balancer (back end)
+    Default: 443
+  AppInstanceID:
+    Type: String
+    Description: App EC2 instance ID to access over PrivateLink
+  # AppInstanceID2:
+  #   Type: String
+  #   Description: App EC2 instance ID to access over PrivateLink
+  # AppInstanceID3:
+  #   Type: String
+  #   Description: App EC2 instance ID to access over PrivateLink
+  EnclaveId:
+    Description: 'AWS Account ID of the enclave where we should advertise the service'
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /AIS/AccountSetup/EnclaveId
+Resources:
+  loadbalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: "internal"
+      Subnets:
+        - !ImportValue ais-provided-vpc-PrivSubnet1
+        - !ImportValue ais-provided-vpc-PrivSubnet2
+        - !ImportValue ais-provided-vpc-PrivSubnet3
+      Type: network
+      Tags:
+        - Key: Privatelinks
+          Value: to be exposed via privatelinks
+  listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref targetgroup
+      LoadBalancerArn: !Ref loadbalancer
+      Port: !Ref FrontendPort
+      Protocol: TCP
+  targetgroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Port: !Ref BackendPort
+      Protocol: TCP
+      TargetType: instance
+      Targets:
+        - Id: !Ref AppInstanceID
+        # - Id: !Ref AppInstanceID2
+        # - Id: !Ref AppInstanceID3
+      VpcId: !ImportValue ais-provided-vpc-VPCID
+# The VPC Endpoint Service
+  EndpointService:
+    Type: AWS::EC2::VPCEndpointService
+    Properties:
+      NetworkLoadBalancerArns:
+        - !Ref loadbalancer
+      AcceptanceRequired: False
+  EndpointServicePermission:
+    Type: AWS::EC2::VPCEndpointServicePermissions
+    Properties:
+      ServiceId: !Ref 'EndpointService'
+      AllowedPrincipals:
+        - !Sub 'arn:aws:iam::${EnclaveId}:root'
+# The Interface VPC Endpoint, which goes into the AIS account. The
+# DNS name will be registered in the output value below.
+  AISVpcEndpoint:
+    Type: Custom::VpcEndpointRequestor
+    DependsOn: EndpointServicePermission
+    Properties:
+      ServiceToken: !ImportValue ais-vpc-endpoint-requestor-arn
+      EndpointServiceID: !Ref EndpointService
+      ip_permissions:
+        - from_port: !Ref FrontendPort # this will be converted to a Security Group, add a range of ports or a single one
+          to_port: !Ref FrontendPort # this will be converted to a Security Group, add a range of ports or a single one
+          ip_ranges:
+            - cidr_ip: 17.0.0.0/8
+              description: AppleDesktop
+            - cidr_ip: 10.0.0.0/8
+              description: ApplePrivateCIDR
+Outputs:
+  LoadBalancerName:
+    Description: Load balancer name
+    Value:
+        Ref: loadbalancer
+    Export:
+      Name: !Sub "${AWS::StackName}-ELB-Name"
+  LoadBalancerDNSName:
+    Description: Load balancer DNS name
+    Value:
+        Fn::GetAtt:
+          - loadbalancer
+          - DNSName
+    Export:
+      Name: !Sub "${AWS::StackName}-NLB-DNS"
+  TargetGroupID:
+    Description: Target Group for sharing across CFTs
+    Value:
+      Ref: targetgroup
+    Export:
+      Name: !Sub "${AWS::StackName}-TG-ID"
+  AISVpcEndpointDNSName:
+      Description: The VPC Endpoint DNS Name
+      Value: !GetAtt AISVpcEndpoint.dnsname
+      Export:
+        Name: !Sub "${AWS::StackName}-VPCE-DNSName"

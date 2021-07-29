@@ -1,0 +1,100 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: ECS@Apple - Web Server
+
+Parameters:
+  ClusterName:
+    Description: ECS Cluster
+    Type: String
+
+  LaunchType:
+    Description: Launch Type
+    Type: String
+    Default: EC2
+    AllowedValues:
+      - EC2
+      - FARGATE
+
+  TargetGroupArn:
+    Description: Target Group where tasks will be attached to
+    Type: String
+
+  ContainerImage:
+    Description: Container image to use
+    Type: String
+    Default: httpd:2.4
+
+Resources:
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      PermissionsBoundary: !Sub "arn:aws:iam::${AWS::AccountId}:policy/ais-permissions-boundaries"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  WebServerTask:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      ContainerDefinitions:
+        - Name: httpd
+          Essential: true
+          Image: !Ref ContainerImage
+          Command:
+            - '/bin/sh -c "echo ''<html> <head> <title>Amazon ECS Sample App</title> <style>body {margin-top: 40px; background-color: #333;} </style> </head><body> <div style=color:white;text-align:center> <h1>Amazon ECS Sample App</h1> <h2>Congratulations!</h2> <p>Your application is now running on a container in Amazon ECS.</p> </div></body></html>'' >  /usr/local/apache2/htdocs/index.html && httpd-foreground"'
+          EntryPoint:
+            - sh
+            - -c
+          PortMappings:
+            - ContainerPort: 80
+      Cpu: "256"
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      Family: ecs-task-definition
+      Memory: "512"
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - !Ref LaunchType
+
+  WebServerService:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: !Ref ClusterName
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 100
+      DesiredCount: 1
+      EnableECSManagedTags: true
+      LaunchType: !Ref LaunchType
+      LoadBalancers:
+        - ContainerName: httpd
+          ContainerPort: 80
+          TargetGroupArn: !Ref TargetGroupArn
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          SecurityGroups:
+            - !Ref NodeSecurityGroup
+            - !ImportValue ais-shared-services-sg-SS-SG
+          Subnets:
+            - !ImportValue ais-provided-vpc-PrivSubnet1
+            - !ImportValue ais-provided-vpc-PrivSubnet2
+            - !ImportValue ais-provided-vpc-PrivSubnet3
+      PropagateTags: SERVICE
+      ServiceName: !Sub "${AWS::StackName}"
+      TaskDefinition: !Ref WebServerTask
+
+  NodeSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub "${AWS::StackName} SG"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      VpcId: !ImportValue ais-provided-vpc-VPCID

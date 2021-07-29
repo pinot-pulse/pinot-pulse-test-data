@@ -1,0 +1,108 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Lambda Function Template
+Parameters:
+  FunctionName:
+    Type: String
+  VPCStackName:
+    Description: Stack name the VPC belongs to
+    Type: 'String'
+    Default: 'ais-provided-vpc'
+Resources:
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${FunctionName}'
+      RetentionInDays: 90
+
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AWS::StackName}-FunctionRole'
+      Path: /service-role/
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: ExecutionRequirements
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: AllowLambdaToWriteLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${FunctionName}:log-stream:*'
+              - Sid: AllowLambdaToCreateLogGroups
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${FunctionName}:log-stream:'
+              - Sid: AllowLambdaToManageElasticNetworkInterfaces
+                Effect: Allow
+                Action:
+                  - ec2:CreateNetworkInterface
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DeleteNetworkInterface
+                Resource: '*'
+      PermissionsBoundary: !Sub 'arn:aws:iam::${AWS::AccountId}:policy/ais-permissions-boundaries'
+
+  LambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description:  'Lambda Function that Invoke External API using Proxy and stores log info to CloudWatch Logs'
+      FunctionName: !Sub "${FunctionName}"
+      Handler:      'index.lambda_handler'
+      MemorySize:   128
+      Role:         !Sub '${LambdaRole.Arn}'
+      Runtime:      python3.6
+      Timeout:      60
+      VpcConfig:
+        SecurityGroupIds:
+          - Fn::ImportValue: ais-shared-services-sg-SS-SG
+        SubnetIds:
+          - Fn::ImportValue: !Sub ${VPCStackName}-PrivSubnet1
+          - Fn::ImportValue: !Sub ${VPCStackName}-PrivSubnet2
+          - Fn::ImportValue: !Sub ${VPCStackName}-PrivSubnet3
+      Environment:
+        Variables:
+          LOG_LEVEL: INFO
+          HTTP_PROXY: "http://proxy.config.pcp.local:3128"
+          HTTPS_PROXY: "http://proxy.config.pcp.local:3128"
+      Code:
+        ZipFile: |
+            """Lambda Function that Invoke External API using Proxy and stores log info to CloudWatch Logs."""
+            import boto3
+            import cfnresponse
+            from cfnresponse import send, SUCCESS, FAILED
+            import os
+            import sys
+            import traceback
+            import logging
+            from botocore.vendored import requests
+
+            # Logging setup
+            log = logging.getLogger()
+            logging.basicConfig(level=logging.INFO)
+            logLevel = os.environ.get('LOG_LEVEL', 'INFO')
+            log.setLevel(logLevel.upper())
+            log.info("log level: %s" % logLevel)
+
+            def lambda_handler(event, context):
+                try:
+                    log.info("Event: %s" % event)
+                    resp = requests.get(url="https://jsonplaceholder.typicode.com/todos/1")
+                    print(resp.text)
+                    return resp.text
+                except Exception as e:
+                    exc_type, exc_value, exc_traceback = sys.exc_info()
+                    exceptionMessage = str(traceback.print_exception(
+                        exc_type, exc_value, exc_traceback, file=sys.stdout))
+                    log.info("Exception: %s" % exceptionMessage)
+                    raise Exception(exceptionMessage)

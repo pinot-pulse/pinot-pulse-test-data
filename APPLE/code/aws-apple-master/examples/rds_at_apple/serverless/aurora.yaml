@@ -1,0 +1,110 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: Aurora serverless cluster
+
+Parameters:
+  DBName:
+    Type: String
+    Default: RDSAtApple
+
+  DBEngine:
+    Description: Select Database Engine
+    Type: String
+    Default: mysql
+    AllowedValues: ["mysql", "postgres"]
+
+  BackupRetentionPeriod:
+    Description: Backup retention period (in days).
+    Type: Number
+    Default: 31
+    MinValue: 1
+    MaxValue: 35
+
+Mappings:
+  DBEngines:
+    mysql:
+      engine: aurora
+      version: 5.6
+      port: 3306
+    postgres:
+      engine: aurora-postgresql
+      version: 10.7
+      port: 5432
+
+Resources:
+  Cluster:
+    Type: AWS::RDS::DBCluster
+    Properties:
+      EngineMode: serverless
+      Engine: !FindInMap [DBEngines, !Ref DBEngine, engine]
+      EngineVersion: !FindInMap [DBEngines, !Ref DBEngine, version]
+      DatabaseName: !Ref DBName
+      DBClusterIdentifier: !Sub ${AWS::StackName}
+      MasterUsername: !Sub "{{resolve:secretsmanager:${Secret}:SecretString:username}}"
+      MasterUserPassword: !Sub "{{resolve:secretsmanager:${Secret}:SecretString:password}}"
+      BackupRetentionPeriod: !Ref BackupRetentionPeriod
+      StorageEncrypted: True
+      DBSubnetGroupName: !Ref SubnetGroup
+      VpcSecurityGroupIds:
+        - !Ref VPCSecurityGroup
+
+  Secret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${AWS::StackName}-secrets"
+      Description: !Sub "Secret for ${AWS::StackName} RDS instance"
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "rdsatappleadmin"}'
+        GenerateStringKey: "password"
+        PasswordLength: 41
+        ExcludeCharacters: '"@/\'
+
+  SubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: !Sub "${AWS::StackName}"
+      SubnetIds:
+        - !ImportValue ais-provided-vpc-PrivSubnet1
+        - !ImportValue ais-provided-vpc-PrivSubnet2
+        - !ImportValue ais-provided-vpc-PrivSubnet3
+
+  VPCSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub "${AWS::StackName}-sg"
+      VpcId: !ImportValue ais-provided-vpc-VPCID
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !FindInMap [DBEngines, !Ref DBEngine, port]
+          ToPort: !FindInMap [DBEngines, !Ref DBEngine, port]
+          CidrIp: !ImportValue ais-provided-vpc-VPCCIDR
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: !ImportValue ais-provided-vpc-VPCCIDR
+
+Outputs:
+  Endpoint:
+    Description: The connection endpoint for the DB cluster
+    Value: !GetAtt Cluster.Endpoint.Address
+    Export:
+      Name: !Sub "${AWS::StackName}-Endpoint"
+
+  Port:
+    Description: The port number that will accept connections on this DB cluster
+    Value: !GetAtt Cluster.Endpoint.Port
+    Export:
+      Name: !Sub "${AWS::StackName}-Port"
+
+  SecurityGroup:
+    Description: SecurityGroup with access to this Database
+    Value: !Ref VPCSecurityGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-SG"
+
+  Secret:
+    Description: ARN of the created RDS Secret
+    Value: !Ref Secret
+    Export:
+      Name: !Sub "${AWS::StackName}-Secret"

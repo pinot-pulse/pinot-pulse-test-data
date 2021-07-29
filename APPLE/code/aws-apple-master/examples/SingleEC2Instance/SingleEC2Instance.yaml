@@ -1,0 +1,100 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Test instance
+
+Parameters:
+  InstanceType:
+    Description: Instance type to launch
+    Type: String
+    Default: t3.micro
+  ImageId:
+    Description: AMI Id
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/AIS/AMI/AmazonLinux2/Id'
+  AZNumber:
+    Description: The Index which defines the Availability Zone to use (1, 2, or 3)
+    Type: Number
+    AllowedValues: [1, 2, 3]
+    Default: 1
+
+Resources:
+  EC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      IamInstanceProfile:
+        Ref: InstanceProfile
+      ImageId:
+        Ref: ImageId
+      InstanceType:
+        Ref: InstanceType
+      SecurityGroupIds:
+        - Fn::ImportValue: ais-shared-services-sg-SS-SG
+        - Ref: SecurityGroup
+      SubnetId:
+        Fn::ImportValue:
+          Fn::Sub: ais-provided-vpc-PrivSubnet${AZNumber}
+      Tags:
+        - Key: Name
+          Value: !Ref AWS::StackName
+      UserData:
+        Fn::Base64:
+          Fn::Sub: |
+            #!/bin/bash
+            set -eux
+
+            /opt/tools/bin/configure_proxy.sh
+
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription:
+        Fn::Sub: "${AWS::StackName} SG"
+      VpcId:
+        Fn::ImportValue: ais-provided-vpc-VPCID
+      SecurityGroupEgress:
+      - IpProtocol: tcp
+        FromPort: 443
+        ToPort: 443
+        CidrIp:
+          Fn::ImportValue: ais-provided-vpc-VPCCIDR
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - Ref: InstanceRole
+
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: RunInstanceWithImdsV2Only
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: 'ec2:RunInstances'
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    ec2:MetadataHttpTokens": "required"
+      ManagedPolicyArns:
+        - Fn::Sub: arn:aws:iam::${AWS::AccountId}:policy/AISSystemLogsPolicy
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      PermissionsBoundary: !Sub 'arn:aws:iam::${AWS::AccountId}:policy/ais-permissions-boundaries'
+
+Outputs:
+  EC2InstanceID:
+    Description: The EC2 Instance ID
+    Value: !Ref EC2Instance
+    Export:
+      Name: !Sub "${AWS::StackName}-Instance-ID"

@@ -1,0 +1,19 @@
+<!doctype html>
+<html>
+<head>
+<title>AIS Sample App</title>
+</head>
+<body>
+{% if instance_az %}
+  <h1>Hello from AWS!</h1>
+  <p>This response is coming from:</p>
+  <ul>
+    <li>Instance ID: {{ instance_id }}</li>
+    <li>IP Address: {{ instance_ip }}</li>
+    <li>Running in availabilty zone: {{ instance_az }}</li>
+  </ul>
+{% else %}
+  <h1>Hello from somewhere other than AWS!</h1>
+{% endif %}
+</body>
+</html>

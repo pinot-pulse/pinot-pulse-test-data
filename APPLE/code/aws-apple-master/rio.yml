@@ -1,0 +1,19 @@
+schemaVersion: 2.0
+timeout: 30
+
+notify:
+  email:
+    enabled: true
+  pullRequestComment:
+    postOnSuccess: true
+    postOnFailure: true
+
+machine:
+  baseImage: docker.apple.com/cloudtech/awscli:latest
+
+builds:
+  - branchName: master
+    build:
+      template: freestyle:v4:prb
+      steps:
+        - bats .rio/test.sh

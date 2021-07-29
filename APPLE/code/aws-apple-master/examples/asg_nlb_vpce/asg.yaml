@@ -1,0 +1,131 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: AIS Customer Test Stack - ASG Stage
+
+Parameters:
+  ImageId:
+    Description: AMI Id
+    Type: "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>"
+    Default: "/AIS/AMI/AmazonLinux2/Id"
+
+  InstanceType:
+    Description: EC2 instance type
+    Type: String
+    Default: t3.small
+
+  AutoScalingGroupMinSize:
+    Description: Minimum size of ASG.
+    Type: Number
+    Default: 1
+
+  AutoScalingGroupMaxSize:
+    Description: Maximum size of ASG.
+    Type: Number
+    Default: 3
+
+  AutoScalingGroupDesiredCapacity:
+    Description: Desired capacity of ASG.
+    Type: Number
+    Default: 1
+
+  TargetGroupArn:
+    Description: TargetGroup to attach instances to
+    Type: String
+
+Resources:
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      LaunchConfigurationName: !Ref LaunchConfig
+      TargetGroupARNs:
+        - !Ref TargetGroupArn
+      MinSize: !Ref AutoScalingGroupMinSize
+      MaxSize: !Ref AutoScalingGroupMaxSize
+      DesiredCapacity: !Ref AutoScalingGroupDesiredCapacity
+      MetricsCollection:
+        - Granularity: 1Minute
+      VPCZoneIdentifier:
+        - !ImportValue ais-provided-vpc-PrivSubnet1
+        - !ImportValue ais-provided-vpc-PrivSubnet2
+        - !ImportValue ais-provided-vpc-PrivSubnet3
+      HealthCheckGracePeriod: 300
+      HealthCheckType: EC2
+      TerminationPolicies:
+        - OldestInstance
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-Instance"
+          PropagateAtLaunch: true
+
+  LaunchConfig:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      AssociatePublicIpAddress: false
+      IamInstanceProfile: !Ref InstanceProfile
+      ImageId: !Ref ImageId
+      InstanceType: !Ref InstanceType
+      SecurityGroups:
+        - !Ref SecurityGroup
+        - !ImportValue ais-shared-services-sg-SS-SG
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+
+          # Configure proxies
+          /opt/tools/bin/configure_proxy.sh
+          set -a && source /etc/environment
+
+          # Configure nginx
+          amazon-linux-extras install nginx1.12 -y
+          cat << EOF > /etc/nginx/conf.d/example.conf
+          server {
+              listen         8080 default_server;
+              server_name    example.com www.example.com;
+              root           /var/www/example;
+              index          index.html;
+          }
+          EOF
+          mkdir -p /var/www/example
+          cat << EOF > /var/www/example/index.html
+          <html>
+            <head><title>AWS@Apple EC2 Sample App</title></head>
+            <body><div style=text-align:center><h1>AWS@Apple EC2 Sample App</h1><h2>Congratulations!</h2><p>Your application is now running on a AutoScalingGroup.</p></div></body>
+          </html>
+          EOF
+          chown -R root:root /var/www/example
+          chmod -R go-w /var/www/example/
+          systemctl enable nginx
+          systemctl start nginx
+
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - Fn::Sub: arn:aws:iam::${AWS::AccountId}:policy/AISSystemLogsPolicy
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      PermissionsBoundary: !Sub "arn:aws:iam::${AWS::AccountId}:policy/ais-permissions-boundaries"
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - Ref: InstanceRole
+
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub "${AWS::StackName} SG"
+      VpcId: !ImportValue ais-provided-vpc-VPCID
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: !ImportValue ais-provided-vpc-VPCCIDR

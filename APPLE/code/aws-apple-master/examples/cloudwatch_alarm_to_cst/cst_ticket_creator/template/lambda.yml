@@ -1,0 +1,129 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Artifacts creation for Lambda
+Parameters:
+  LambdaFunctionName:
+    Type: "String"
+    Description: "Name of the function"
+    Default: "CSTTicketCreator"
+  DeploymentS3Bucket:
+    Type: "String"
+    Description: 'The name of the s3 bucket holding the example lambda zip'
+  DeploymentS3Key:
+    Type: "String"
+    Description: 'The name of the object representing the example lambda zip'
+  AppPass:
+    Type: "String"
+    Description: 'IDMS app pass for environment'
+  AppId:
+    Type: "String"
+    Description: 'IDMS appId'
+  AssignedGroupId:
+    Type: "String"
+    Description: 'CST assigned group id'
+  CallerId:
+    Type: "String"
+    Description: 'CST Caller Id'    
+  AssignedPersonId:
+    Type: "String"
+    Description: 'CST assigned personID'
+  Configuration:
+    Type: "String"
+    Description: 'CST Configuration field'    
+  ENV:
+    Type: "String"
+    Description: 'Dev'
+    AllowedValues:
+      - prod
+      - dev
+      - test
+    ConstraintDescription: Must specify one of (prod, dev, test)
+
+Conditions:
+  IsProdEnv: !Equals [ !Ref ENV, prod ]
+
+Resources:
+  CSTLambdaRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      PermissionsBoundary: !Sub 'arn:aws:iam::${AWS::AccountId}:policy/ais-permissions-boundaries'
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+        - arn:aws:iam::aws:policy/CloudWatchFullAccess
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription:
+        Fn::Sub: "${AWS::StackName} SG"
+      VpcId:
+        Fn::ImportValue: ais-provided-vpc-VPCID
+      SecurityGroupEgress:
+      - IpProtocol: "-1"
+        CidrIp: 0.0.0.0/0          
+  CSTLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        S3Key: !Ref DeploymentS3Key
+        S3Bucket: !Ref DeploymentS3Bucket
+      Description: !Sub "${AWS::StackName} CST Ticket Creator Lambda function"
+      FunctionName: !Ref LambdaFunctionName
+      Handler: "cst_ticket_creator.lambda_handler"
+      MemorySize: 256
+      Role: !GetAtt CSTLambdaRole.Arn
+      Runtime: "python3.8"
+      Timeout: 60
+      VpcConfig:
+        SecurityGroupIds:
+          - Fn::ImportValue: ais-shared-services-sg-SS-SG
+          - !Ref LambdaSecurityGroup
+        SubnetIds:
+          - '{{resolve:ssm:/GNCS/0/Vpcs/0/denali-provided-enterprise-subnet/0/Id:1}}'
+          - '{{resolve:ssm:/GNCS/0/Vpcs/0/denali-provided-enterprise-subnet/1/Id:1}}'
+          - '{{resolve:ssm:/GNCS/0/Vpcs/0/denali-provided-enterprise-subnet/2/Id:1}}'
+      Environment:
+        Variables:
+          VERIFY_SSL: !If [IsProdEnv, 1, 0]
+          CST_CERT: /var/task/apple_corporate_root_ca_2.pem
+          IDMS_CERT: /var/task/apple_corporate_root_ca_2.pem
+          CST_URL: !If [IsProdEnv, 'https://kentaurus.corp.apple.com/api/11.0/createRecords', 'https://kentaurus-uat.corp.apple.com/kentaurus/api/11.0/createRecords']
+          APP_ID: !Ref AppId
+          CALLER_ID: !Ref CallerId
+          ENVIRONMENT: !If [IsProdEnv, 'Production', 'UAT']
+          ASSIGNED_PERSON_ID: !Ref AssignedPersonId
+          ASSIGNED_GROUP_ID: !Ref AssignedGroupId
+          APP_PASS: !Ref AppPass
+          CONFIGURATION: !Ref Configuration
+          DS_TOKEN_URL: !If [IsProdEnv, 'https://idmsservice.corp.apple.com/auth/apptoapp/token/generate', 'https://idmsservice-uat.corp.apple.com/auth/apptoapp/token/generate']
+
+  CSTTicketTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: sns-topic-for-cst-ticket-creation
+      TopicName: sns-topic-for-cst-ticket-creation
+      Subscription:
+        - Endpoint: !GetAtt CSTLambdaFunction.Arn
+          Protocol: lambda
+
+  PermissionForEventsToInvokeLambda:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName:
+        Ref: "CSTLambdaFunction"
+      Action: "lambda:InvokeFunction"
+      Principal: "sns.amazonaws.com"
+      SourceArn: !Ref CSTTicketTopic
+
+Outputs:
+  CSTTopic:
+    Description: Arn of the CST Topic
+    Value: !Ref CSTTicketTopic
+    Export:
+      Name: !Sub "${AWS::StackName}-topic-arn"

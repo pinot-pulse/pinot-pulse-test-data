@@ -1,0 +1,19 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+bases:
+  - ../../base
+images:
+  - name: k8s.gcr.io/autoscaling/cluster-autoscaler
+    newName: k8s.gcr.io/autoscaling/cluster-autoscaler
+    newTag: v1.18.2
+patchesStrategicMerge:
+  - eviction.yaml
+  - proxy.yaml
+  - args.yaml
+patchesJson6902:
+  - path: cluster_name.yaml
+    target:
+      kind: Deployment
+      name: cluster-autoscaler
+      group: apps
+      version: v1

@@ -1,0 +1,20 @@
+[Unit]
+Description = app
+After = network.target
+
+[Service]
+PermissionsStartOnly = true
+PIDFile = /var/run/app/app.pid
+User = www
+Group = www
+WorkingDirectory = /var/www
+ExecStartPre = /bin/mkdir -p /var/run/app
+ExecStartPre = /bin/chown -R www:www /var/run/app
+ExecStart = /usr/bin/env gunicorn app:app -b 0.0.0.0:8080 --pid /var/run/app/sampleapp.pid --chdir /var/www/app/
+ExecReload = /bin/kill -s HUP $MAINPID
+ExecStop = /bin/kill -s TERM $MAINPID
+ExecStopPost = /bin/rm -rf /run/var/run/app/
+PrivateTmp = true
+
+[Install]
+WantedBy = multi-user.target

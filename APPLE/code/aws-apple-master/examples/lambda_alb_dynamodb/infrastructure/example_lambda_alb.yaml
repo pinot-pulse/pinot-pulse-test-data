@@ -1,0 +1,430 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: "An ALB, DynamoDB, and Lambda function example"
+
+Parameters:
+
+  FlaskLambdaFunctionName:
+    Type: "String"
+    Description: 'The name of the Lambda Function'
+    AllowedPattern: "^[a-zA-Z0-9]+[a-zA-Z0-9-]+[a-zA-Z0-9]+$"
+    Default: "lambda-example"
+
+  FlaskLambdaRoleName:
+    Type: "String"
+    Description: "Name of the IAM Role used by the Lambda function"
+    Default: "flask-lambda-role"
+
+  FlaskLambdaS3Bucket:
+    Type: "String"
+    Description: 'The name of the s3 bucket holding the example lambda zip'
+
+  FlaskLambdaS3Key:
+    Type: "String"
+    Description: 'The name of the object representing the example lambda zip'
+
+  ContentBucketName:
+    Type: "String"
+    Description: 'Name of S3 bucket used to host static content'
+
+  ContentBucketWhitelistCidr:
+    Type: List<String>
+    Description: List of IP address that can interact with the bucket
+    Default: "17.0.0.0/8"
+
+  EnclaveId:
+    Description: 'AWS Account ID of the enclave where we should advertise the service'
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /AIS/AccountSetup/EnclaveId
+
+  ACSecret:
+    Description: 'ID of the pre-created Secrets Manager secret'
+    Type: "String"
+    Default: "acSecret"
+
+  DynamoDBStackNameParameter:
+    Type: "String"
+    Description: "The name of the DynamoDB CloudFormation Stack"
+
+Conditions:
+  IpRestriction: !Not [!Equals [!Join [",", !Ref ContentBucketWhitelistCidr], ""]]
+
+Resources:
+###########################################################
+################## Network Load Balancer ##################
+###########################################################
+  NetworkLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: internal
+      Type: network
+      Subnets:
+        - !ImportValue ais-provided-vpc-PrivSubnet1
+        - !ImportValue ais-provided-vpc-PrivSubnet2
+        - !ImportValue ais-provided-vpc-PrivSubnet3
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName} NLB"
+        - Key: Privatelinks
+          Value: to be exposed via privatelinks
+
+  NLBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${AWS::StackName}NTG"
+      TargetType: ip
+      Protocol: TCP
+      Port: 80
+      VpcId: !ImportValue ais-provided-vpc-VPCID
+
+  NLBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref NLBTargetGroup
+      LoadBalancerArn: !Ref NetworkLoadBalancer
+      Port: 80
+      Protocol: TCP
+
+###############################################################
+################## Application Load Balancer ##################
+###############################################################
+
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: internal
+      Type: application
+      Subnets:
+        - !ImportValue ais-provided-vpc-PrivSubnet1
+        - !ImportValue ais-provided-vpc-PrivSubnet2
+        - !ImportValue ais-provided-vpc-PrivSubnet3
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName} ALB"
+
+  ALBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${AWS::StackName}ATG"
+      TargetType: lambda
+      Targets:
+      - Id: !GetAtt "FlaskLambdaFunction.Arn"
+      HealthCheckEnabled: true
+      HealthCheckPath: /internal/health
+
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ALBTargetGroup
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 80
+      Protocol: HTTP
+
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription:
+        Fn::Sub: "${AWS::StackName} SG"
+      VpcId:
+        Fn::ImportValue: ais-provided-vpc-VPCID
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        CidrIp:
+          Fn::ImportValue: ais-provided-vpc-VPCCIDR
+      SecurityGroupEgress:
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        CidrIp:
+          Fn::ImportValue: ais-provided-vpc-VPCCIDR
+
+#####################################################
+############### Flask Lambda Function ###############
+#####################################################
+
+  FlaskLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        S3Key: !Ref FlaskLambdaS3Key
+        S3Bucket: !Ref FlaskLambdaS3Bucket
+      Description: !Sub "${AWS::StackName} Flask Lambda function"
+      FunctionName: !Ref "FlaskLambdaFunctionName"
+      Handler: "example.wsgi.lambda_handler"
+      MemorySize: 128
+      Role: !GetAtt "FlaskLambdaIAMRole.Arn"
+      Runtime: "python3.7"
+      Timeout: 10
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref ALBSecurityGroup
+          - !ImportValue ais-shared-services-sg-SS-SG
+          - !ImportValue ais-provided-vpc-InsideVPCSecurtiyGroup
+        SubnetIds:
+        - !ImportValue ais-provided-vpc-PrivSubnet1
+        - !ImportValue ais-provided-vpc-PrivSubnet2
+        - !ImportValue ais-provided-vpc-PrivSubnet3
+      Environment:
+        Variables:
+          BUCKET_NAME: !Ref "ContentBucketName"
+          SECRET_NAME: !Ref "ACSecret"
+          DYNAMODB_TABLE_NAME:
+            Fn::ImportValue: !Sub "${DynamoDBStackNameParameter}-Table-Name"
+
+  ALBInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt "FlaskLambdaFunction.Arn"
+      Action: lambda:InvokeFunction
+      Principal: elasticloadbalancing.amazonaws.com
+
+  FlaskLambdaIAMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref FlaskLambdaRoleName
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - "lambda.amazonaws.com"
+      PermissionsBoundary: !Sub 'arn:aws:iam::${AWS::AccountId}:policy/ais-permissions-boundaries'
+      Policies:
+        - PolicyName: !Sub "${AWS::StackName}-flask-lambda-policy"
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Effect: Allow
+                Resource:
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${FlaskLambdaFunctionName}:*"
+              - Action:
+                  - ec2:CreateNetworkInterface
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DeleteNetworkInterface
+                Effect: Allow
+                Resource: '*'
+        - PolicyName: KMSKeyRetrieval
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Sid: RetrievingKMSKey
+                Effect: Allow
+                Action:
+                  - kms:Get*
+                  - kms:Decrypt
+                Resource:
+                  Fn::Sub: 'arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/*'
+        - PolicyName: SecretsRetrieval
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Sid: RetrievingSecrets
+                Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  Fn::Sub: 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${ACSecret}-*'
+        - PolicyName: DynamoDBAccess
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Sid: AccessingDynamoDB
+                Effect: Allow
+                Action:
+                  - dynamodb:BatchGetItem
+                  - dynamodb:BatchWriteItem
+                  - dynamodb:CreateTable
+                  - dynamodb:DeleteItem
+                  - dynamodb:DeleteTable
+                  - dynamodb:DescribeTable
+                  - dynamodb:GetItem
+                  - dynamodb:ListTables
+                  - dynamodb:PutItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                  - dynamodb:UpdateItem
+                  - dynamodb:UpdateTable
+                Resource:
+                  Fn::Sub: 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:*'
+
+  FlaskLambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${FlaskLambdaFunctionName}"
+      RetentionInDays: 90
+
+
+###########################################################
+####################### KMS KEY ##########################
+###########################################################
+
+  # The KMS Key used to encrypt the bucket used for static content
+  ContentKMSKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: KMS Key to Encrypt the S3 Bucket
+      EnableKeyRotation: true
+      KeyPolicy:
+        Id: KeyPolicy
+        Version: "2012-10-17"
+        Statement:
+          - Sid: Enable IAM User Permissions
+            Effect: Allow
+            Principal:
+              AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+            Action: kms:*
+            Resource: "*"
+          - Sid: Allow IAM Roles usage of the key
+            Effect: Allow
+            Principal:
+              AWS: !GetAtt "FlaskLambdaIAMRole.Arn"
+              Service: s3.amazonaws.com
+            Action:
+              - kms:Encrypt
+              - kms:Decrypt
+              - kms:ReEncrypt*
+              - kms:GenerateDataKey*
+              - kms:DescribeKey
+            Resource: "*"
+
+
+###########################################################
+################### S3 Content Bucket #####################
+###########################################################
+
+  # The S3 bucket used to store static content served automatically
+  # via Flask-S3./s
+  ContentBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref ContentBucketName
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !Ref ContentKMSKey
+
+  ContentBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ContentBucket
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: DenyUploadIfNotEncrypted
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource: !Sub 'arn:aws:s3:::${ContentBucket}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: false
+          - !If
+            - IpRestriction
+            - Sid: Restrict access to whitelisted IP addresses
+              Effect: "Deny"
+              Action:
+                - "s3:*"
+              Principal: "*"
+              Resource: !Sub "arn:aws:s3:::${ContentBucket}/*"
+              Condition:
+                StringNotEquals:
+                  aws:sourceVpce: !ImportValue ais-provided-vpc-VPCS3Endpoint
+                IpAddress:
+                  aws:SourceIp: 0.0.0.0/0
+                NotIpAddress:
+                  aws:SourceIp: !Ref ContentBucketWhitelistCidr
+            - !Ref "AWS::NoValue"
+
+##################################################
+################## VPC Endpoint ##################
+##################################################
+
+# The VPC Endpoint Service
+  EndpointService:
+    Type: AWS::EC2::VPCEndpointService
+    Properties:
+      NetworkLoadBalancerArns:
+        - !Ref NetworkLoadBalancer
+      AcceptanceRequired: False
+
+  EndpointServicePermission:
+    Type: AWS::EC2::VPCEndpointServicePermissions
+    Properties:
+      ServiceId: !Ref 'EndpointService'
+      AllowedPrincipals:
+        - !Sub 'arn:aws:iam::${EnclaveId}:root'
+
+# The Interface VPC Endpoint, which goes into the AIS account. The
+# DNS name will be registered in the output value below.
+  AISVpcEndpoint:
+    Type: Custom::VpcEndpointRequestor
+    DependsOn: EndpointServicePermission
+    Properties:
+      ServiceToken: !ImportValue ais-vpc-endpoint-requestor-arn
+      EndpointServiceID: !Ref EndpointService
+      ip_permissions:
+        - from_port: 80
+          to_port: 80
+          ip_ranges:
+            - cidr_ip: 17.0.0.0/8
+              description: AppleDesktop
+            - cidr_ip: 10.0.0.0/8
+              description: AnotherCIDR
+
+Outputs:
+  FlaskLambdaArn:
+    Value: !GetAtt "FlaskLambdaFunction.Arn"
+
+  ALBDNS:
+    Description: The Application Load Balancer DNS Name
+    Value: !GetAtt ApplicationLoadBalancer.DNSName
+    Export:
+      Name: !Sub "${AWS::StackName}-ALB-DNS"
+
+  ALBSG:
+    Description: The Application Load Balancer Security Group
+    Value: !Ref ALBSecurityGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-ALB-SG"
+
+  NLBTgArn:
+    Description: The Network Load Balancer Target Group ARN
+    Value: !Ref NLBTargetGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-NLB-TG-ARN"
+
+  EndpointServiceId:
+    Description: VPC Endpoint Service ID
+    Value:
+      Ref: EndpointService
+    Export:
+      Name: !Sub "${AWS::StackName}-VPCE-SVC-ID"
+
+  PrivateLinkDNSName:
+    Description: The PrivateLink DNS Name
+    Value: !GetAtt AISVpcEndpoint.dnsname
+    Export:
+      Name: !Sub "${AWS::StackName}-VPCE-DNSName"
+
+  ContentKMSKeyId:
+    Description: Encryption Key ID
+    Value: !Ref ContentKMSKey
+    Export:
+      Name: !Sub "${AWS::StackName}-Key-ID"

@@ -1,0 +1,243 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: DynamoDB template to create a table with autoscaling
+
+Parameters:
+  PartitionKeyName:
+    Description: The attribute name that is used as the primary key for this table.
+    Type: String
+  PartitionKeyType:
+    Description: The data type of the attribute, S for string, N for numeric, B for binary
+    Type: String
+    Default: S
+    AllowedValues:
+      - 'S'
+      - 'N'
+      - 'B'
+  SortKeyName:
+    Description: The attribute name that is used as the Sort key for this table.
+    Type: String
+  SortKeyType:
+    Description: The data type of the attribute, S for string, N for numeric, B for binary
+    Type: String
+    Default: S
+    AllowedValues:
+      - 'S'
+      - 'N'
+      - 'B'
+  ReadCapacityUnits:
+    Description: Sets the desired minimum number of consistent reads of items per second for the specified table before DynamoDB balances the load.
+    Type: String
+    Default: 5
+  WriteCapacityUnits:
+    Description: Sets the desired minimum number of consistent writes of items per second for the specified table before DynamoDB balances the load.
+    Type: String
+    Default: 5
+  MinReadCapacity:
+    Description: DynamoDB autoscaling min read capacity
+    Type: String
+    Default: 5
+  MaxReadCapacity:
+    Description: DynamoDB autoscaling max read capacity
+    Type: String
+    Default: 15
+  MinWriteCapacity:
+    Description: DynamoDB autoscaling min write capacity
+    Type: String
+    Default: 5
+  MaxWriteCapacity:
+    Description: DynamoDB autoscaling max write capacity
+    Type: String
+    Default: 15
+  TableName:
+    Description: DynamoDB TableName
+    Type: String
+  WriteCapacityUnitsUtilizationTarget:
+    Description: Target write capacity utilization (in percent) that auto scaling tries to achieve
+    Type: Number
+    Default: 80
+  ReadCapacityUnitsUtilizationTarget:
+    Description: Target read capacity utilization (in percent) that auto scaling tries to achieve
+    Type: Number
+    Default: 80
+  SnsEmailSubscription:
+    Description: SNS Email subscription.
+    Type: String
+    AllowedPattern: "^[\\w-\\+]+(\\.[\\w]+)*@[\\w-]+(\\.[\\w]+)*(\\.[a-z]{2,})$|^$"
+
+Resources:
+
+  DynamoDBScalingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+                - application-autoscaling.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+      Policies:
+        -
+          PolicyName: dynamodbscalingpolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              -
+                Effect: Allow
+                Action:
+                  - dynamodb:DescribeTable
+                  - dynamodb:UpdateTable
+                  - cloudwatch:PutMetricAlarm
+                  - cloudwatch:DescribeAlarms
+                  - cloudwatch:DeleteAlarms
+                  - cloudwatch:GetMetricStatistics
+                  - cloudwatch:SetAlarmState
+                Resource: '*'
+      PermissionsBoundary: !Sub 'arn:aws:iam::${AWS::AccountId}:policy/ais-permissions-boundaries'
+
+  DynamoDBTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+        - AttributeName:
+            Ref: PartitionKeyName
+          AttributeType:
+            Ref: PartitionKeyType
+        - AttributeName:
+            Ref: SortKeyName
+          AttributeType:
+            Ref: SortKeyType
+      KeySchema:
+        - AttributeName:
+            Ref: PartitionKeyName
+          KeyType: HASH
+        - AttributeName:
+            Ref: SortKeyName
+          KeyType: RANGE
+      SSESpecification:
+          SSEEnabled: true
+      ProvisionedThroughput:
+        ReadCapacityUnits: !Ref ReadCapacityUnits
+        WriteCapacityUnits: !Ref WriteCapacityUnits
+      TableName: !Ref TableName
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  ReadCapacityScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MaxCapacity:
+        Ref: MaxReadCapacity
+      MinCapacity:
+        Ref: MinReadCapacity
+      ResourceId: !Join
+        - /
+        - - table
+          - Ref: DynamoDBTable
+      RoleARN: !GetAtt DynamoDBScalingRole.Arn
+      ScalableDimension: dynamodb:table:ReadCapacityUnits
+      ServiceNamespace: dynamodb
+
+  ReadScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: ReadAutoScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref ReadCapacityScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: !Ref ReadCapacityUnitsUtilizationTarget
+        ScaleInCooldown: 60
+        ScaleOutCooldown: 60
+        PredefinedMetricSpecification:
+          PredefinedMetricType: DynamoDBReadCapacityUtilization
+
+  WriteCapacityScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MaxCapacity:
+        Ref: MaxWriteCapacity
+      MinCapacity:
+        Ref: MinWriteCapacity
+      ResourceId: !Join
+        - /
+        - - table
+          - Ref: DynamoDBTable
+      RoleARN: !GetAtt DynamoDBScalingRole.Arn
+      ScalableDimension: dynamodb:table:WriteCapacityUnits
+      ServiceNamespace: dynamodb
+
+  WriteScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: WriteAutoScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref WriteCapacityScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: !Ref WriteCapacityUnitsUtilizationTarget
+        ScaleInCooldown: 60
+        ScaleOutCooldown: 60
+        PredefinedMetricSpecification:
+          PredefinedMetricType: DynamoDBWriteCapacityUtilization
+
+  DynamoDBAlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: !Sub ${AWS::StackName} DynamoDB alarm topic
+
+  DynamoDBAlarmSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Endpoint: !Ref SnsEmailSubscription
+      Protocol: email
+      TopicArn: !Ref DynamoDBAlarmTopic
+
+  ReadThrottleEventsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription:  DynamoDB Reads are throttled
+      MetricName: ReadThrottleEvents
+      Namespace: 'AWS/DynamoDB'
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: TableName
+          Value: !Ref DynamoDBTable
+      AlarmActions:
+        - !Ref DynamoDBAlarmTopic
+      OKActions:
+        - !Ref DynamoDBAlarmTopic
+
+  WriteThrottleEventsAlarm:
+    Type: 'AWS::CloudWatch::Alarm'
+    Properties:
+      AlarmDescription: Writes are throttled
+      MetricName: WriteThrottleEvents
+      Namespace: 'AWS/DynamoDB'
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: TableName
+          Value: !Ref DynamoDBTable
+      AlarmActions:
+        - !Ref DynamoDBAlarmTopic
+      OKActions:
+        - !Ref DynamoDBAlarmTopic
+
+Outputs:
+  DynamoDBTable:
+    Description: DynamoDBTable
+    Value:
+      Ref: DynamoDBTable
+  DynamoDBTableARN:
+    Description: DynamoDBTableArn
+    Value: !GetAtt 'DynamoDBTable.Arn'

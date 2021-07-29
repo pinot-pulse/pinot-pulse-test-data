@@ -1,0 +1,110 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Test instance
+
+Parameters:
+  InstanceType:
+    Description: Instance type to launch
+    Type: String
+    Default: t3.small
+  ImageId:
+    Description: AMI Id
+    Type: "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>"
+    Default: "/AIS/AMI/AmazonLinux2/Id"
+  AZNumber:
+    Description: The Index which defines the Availability Zone to use (1, 2, or 3)
+    Type: Number
+    AllowedValues: [1, 2, 3]
+    Default: 1
+  BucketName:
+    Description: BucketName
+    Type: String
+
+Resources:
+  EC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      IamInstanceProfile: !Ref InstanceProfile
+      ImageId: !Ref ImageId
+      InstanceType: !Ref InstanceType
+      SecurityGroupIds:
+        - !ImportValue ais-shared-services-sg-SS-SG
+        - !Ref SecurityGroup
+      SubnetId:
+        Fn::ImportValue: !Sub ais-provided-vpc-PrivSubnet${AZNumber}
+      Tags:
+        - Key: Name
+          Value: !Ref AWS::StackName
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          set -eux
+          /opt/tools/bin/configure_proxy.sh
+
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub "${AWS::StackName} SG"
+      VpcId: !ImportValue ais-provided-vpc-VPCID
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: !ImportValue ais-provided-vpc-VPCCIDR
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref InstanceRole
+
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:aws:iam::${AWS::AccountId}:policy/AISSystemLogsPolicy
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      PermissionsBoundary: !Sub "arn:aws:iam::${AWS::AccountId}:policy/ais-permissions-boundaries"
+      Policies:
+        - PolicyName: S3BucketRW
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: S3BucketRW
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub "arn:aws:s3:::${BucketName}"
+                  - !Sub "arn:aws:s3:::${BucketName}/*"
+        - PolicyName: RunInstanceWithImdsV2Only
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: 'ec2:RunInstances'
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    ec2:MetadataHttpTokens": "required"
+
+Outputs:
+  InstanceID:
+    Description: Instance ID
+    Value: !Ref EC2Instance
+    Export:
+      Name: !Sub "${AWS::StackName}-InstanceID"
+  InstanceRoleArn:
+    Description: Instance Role Arn
+    Value: !GetAtt InstanceRole.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-InstanceRoleArn"

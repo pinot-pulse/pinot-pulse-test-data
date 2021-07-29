@@ -1,0 +1,20 @@
+[Unit]
+Description = app
+After = network.target
+
+[Service]
+Type=forking
+PIDFile = /var/www/app/tmp/pids/server.pid
+User = www
+Group = www
+WorkingDirectory = /var/www/app
+ExecStart = /usr/local/bin/rails server -p 8080 -b 0.0.0.0 -P $PIDFile -d
+ExecReload = /bin/kill -s HUP $MAINPID
+ExecStop = /bin/kill -s TERM $MAINPID
+KillSignal=SIGQUIT
+TimeoutStopSec=5
+KillMode=process
+PrivateTmp=true
+
+[Install]
+WantedBy = multi-user.target

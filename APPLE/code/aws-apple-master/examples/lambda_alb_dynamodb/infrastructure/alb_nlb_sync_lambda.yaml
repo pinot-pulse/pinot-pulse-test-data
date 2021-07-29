@@ -1,0 +1,161 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: "An ALB, DynamoDB, and Lambda function example"
+
+Parameters:
+
+  FlaskStackNameParameter:
+    Type: "String"
+    Description: "The name of the Flask CloudFormation Stack"
+
+  PrereqStackNameParameter:
+    Type: "String"
+    Description: "The name of the prerequisite CloudFormation Stack"
+
+  SyncerLambdaFunctionName:
+    Type: "String"
+    Description: 'The name of the Lambda Function'
+    AllowedPattern: "^[a-zA-Z0-9]+[a-zA-Z0-9-]+[a-zA-Z0-9]+$"
+    Default: "ipsync"
+
+  SyncerLambdaS3Bucket:
+    Type: "String"
+    Description: 'The name of the s3 bucket holding the ipsync lambda zip'
+
+  SyncerLambdaS3Key:
+    Type: "String"
+    Description: 'The name of the object representing the ipsync lambda zip'
+
+  ALBListenerPort:
+    Type: "Number"
+    Description: "The traffic listener port of the ALB"
+    Default: 80
+
+  MaxLookups:
+    Type: "Number"
+    Description: "The max number of DNS lookups per invocation"
+    Default: 50
+
+  MaxInvocations:
+    Type: "Number"
+    Description: "Then number of required invocations before IP address de-registration"
+    Default: 3
+
+Resources:
+#####################################################
+########## ALB NLB Sync Lambda Function ############
+#####################################################
+
+  SyncerLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        S3Key: !Ref SyncerLambdaS3Key
+        S3Bucket: !Ref SyncerLambdaS3Bucket
+      Description: !Sub "${AWS::StackName} Syncer Lambda function"
+      FunctionName: !Ref "SyncerLambdaFunctionName"
+      Handler: "alb_nlb_sync.syncer.lambda_handler"
+      MemorySize: 128
+      Role: !GetAtt "SyncerLambdaIAMRole.Arn"
+      Runtime: "python3.7"
+      Timeout: 120
+      VpcConfig:
+        SecurityGroupIds:
+          - Fn::ImportValue: !Sub "${FlaskStackNameParameter}-ALB-SG"
+          - !ImportValue ais-shared-services-sg-SS-SG
+          - !ImportValue ais-provided-vpc-InsideVPCSecurtiyGroup
+        SubnetIds:
+        - !ImportValue ais-provided-vpc-PrivSubnet1
+        - !ImportValue ais-provided-vpc-PrivSubnet2
+        - !ImportValue ais-provided-vpc-PrivSubnet3
+      Environment:
+        Variables:
+          ALB_DNS_NAME:
+            Fn::ImportValue: !Sub "${FlaskStackNameParameter}-ALB-DNS"
+          ALB_LISTENER: !Ref ALBListenerPort
+          INVOCATIONS_BEFORE_DEREGISTRATION: !Ref MaxInvocations
+          MAX_LOOKUP_PER_INVOCATION: !Ref MaxLookups
+          NLB_TG_ARN:
+            Fn::ImportValue: !Sub "${FlaskStackNameParameter}-NLB-TG-ARN"
+          S3_BUCKET: !Ref "SyncerLambdaS3Bucket"
+          CW_METRIC_FLAG_IP_COUNT: "True"
+
+  SyncerLambdaScheduledRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: "Scheduled rule"
+      ScheduleExpression: rate(1 minute)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt "SyncerLambdaFunction.Arn"
+          Id: TargetFunctionV1
+
+  SyncerLambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt "SyncerLambdaFunction.Arn"
+      Principal: events.amazonaws.com
+      Action: lambda:InvokeFunction
+      SourceArn: !GetAtt "SyncerLambdaScheduledRule.Arn"
+
+  SyncerLambdaIAMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - "lambda.amazonaws.com"
+      PermissionsBoundary: !Sub 'arn:aws:iam::${AWS::AccountId}:policy/ais-permissions-boundaries'
+      Policies:
+        - PolicyName: !Sub "${AWS::StackName}-ipsync-lambda-policy"
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Sid: ENIAccess
+                Action:
+                  - ec2:CreateNetworkInterface
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DeleteNetworkInterface
+                Effect: Allow
+                Resource: '*'
+              - Sid: LogAccess
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Effect: Allow
+                Resource: '*'
+              - Sid: S3Access
+                Action:
+                  - s3:Get*
+                  - s3:PutObject
+                  - s3:CreateBucket
+                  - s3:ListBucket
+                  - s3:ListAllMyBuckets
+                Effect: Allow
+                Resource:
+                  Fn::Join:
+                    - ""
+                    - - Fn::ImportValue: !Sub "${PrereqStackNameParameter}-AF-Bucket-ARN"
+                      - "/*"
+              - Sid: ELBAccess
+                Action:
+                  - elasticloadbalancing:Describe*
+                  - elasticloadbalancing:RegisterTargets
+                  - elasticloadbalancing:DeregisterTargets
+                Effect: Allow
+                Resource: '*'
+
+  SyncerLambdaLogGroup:
+    Type: "AWS::Logs::LogGroup"
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${SyncerLambdaFunctionName}"
+      RetentionInDays: 90
+
+Outputs:
+  SyncerLambdaArn:
+    Value: !GetAtt "SyncerLambdaFunction.Arn"

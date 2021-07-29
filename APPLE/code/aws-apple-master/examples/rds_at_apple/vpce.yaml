@@ -1,0 +1,99 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: RDS@Apple - Endpoint Stage
+
+Parameters:
+  EnclaveId:
+    Description: "AWS Account ID of the enclave where we should advertise the service"
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /AIS/AccountSetup/EnclaveId
+  RDSEndpointIps:
+    Description: The list of RDS ENI IPs
+    Type: CommaDelimitedList
+  Port:
+    Description: Database Port
+    Type: Number
+
+Resources:
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: internal
+      Type: network
+      Subnets:
+        - !ImportValue ais-provided-vpc-PrivSubnet1
+        - !ImportValue ais-provided-vpc-PrivSubnet2
+        - !ImportValue ais-provided-vpc-PrivSubnet3
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName} Load Balancer"
+        - Key: Privatelinks
+          Value: to be exposed via privatelinks
+      LoadBalancerAttributes:
+        - Key: load_balancing.cross_zone.enabled
+          Value: "true"
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Port: !Ref Port
+      Protocol: TCP
+      HealthCheckPort: !Ref Port
+      TargetType: ip
+      Targets:
+        - Id: !Select [0, !Ref RDSEndpointIps]
+        - Id: !Select [1, !Ref RDSEndpointIps]
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: "20"
+      VpcId: !ImportValue ais-provided-vpc-VPCID
+
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn:
+            Ref: TargetGroup
+      LoadBalancerArn: !Ref "LoadBalancer"
+      Port: !Ref Port
+      Protocol: TCP
+
+  EndpointService:
+    Type: AWS::EC2::VPCEndpointService
+    Properties:
+      NetworkLoadBalancerArns:
+        - !Ref LoadBalancer
+      AcceptanceRequired: False
+
+  EndpointServicePermission:
+    Type: AWS::EC2::VPCEndpointServicePermissions
+    Properties:
+      ServiceId: !Ref "EndpointService"
+      AllowedPrincipals:
+        - !Sub "arn:aws:iam::${EnclaveId}:root"
+
+  AISVpcEndpoint:
+    DependsOn: EndpointServicePermission
+    Type: Custom::VpcEndpointRequestor
+    Properties:
+      ServiceToken: !ImportValue ais-vpc-endpoint-requestor-arn
+      EndpointServiceID: !Ref EndpointService
+      ip_permissions:
+        - from_port: !Ref Port
+          to_port: !Ref Port
+          ip_ranges:
+            - cidr_ip: 17.0.0.0/8
+              description: AppleDesktop
+
+Outputs:
+  EndpointServiceId:
+    Description: VPC Endpoint Service ID
+    Value:
+      Ref: EndpointService
+    Export:
+      Name: !Sub "${AWS::StackName}-VPCE-SVC-ID"
+  AISVpcEndpointDNSName:
+    Description: The VPC Endpoint DNS Name
+    Value: !GetAtt AISVpcEndpoint.dnsname
+    Export:
+      Name: !Sub "${AWS::StackName}-VPCE-DNSName"

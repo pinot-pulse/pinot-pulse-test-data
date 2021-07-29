@@ -1,0 +1,164 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Amazon RedShift
+
+Parameters:
+  ClusterType:
+    Description: The type of cluster
+    Type: String
+    Default: single-node
+    AllowedValues:
+      - single-node
+      - multi-node
+
+  DBName:
+    Description: Database Name
+    Type: String
+    Default: redshiftatapple
+
+  Port:
+    Description: The port number on which the cluster accepts incoming connections.
+    Type: Number
+    Default: 5439
+
+  NumberOfNodes:
+    Description: The number of compute nodes in the cluster. For multi-node clusters, the NumberOfNodes parameter must be greater than 1
+    Type: Number
+    MinValue: 2
+    MaxValue: 100
+    Default: 2
+
+  NodeType:
+    Description: The type of node to be provisioned
+    Type: String
+    Default: dc2.large
+    AllowedValues:
+      - ds2.xlarge
+      - ds2.8xlarge
+      - dc2.large
+      - dc2.8xlarge
+
+Conditions:
+  IsMultiNodeCluster: !Equals [!Ref ClusterType, "multi-node"]
+
+Resources:
+  RedShiftClusterRole:
+    Type: AWS::IAM::Role
+    Properties:
+      PermissionsBoundary: !Sub "arn:aws:iam::${AWS::AccountId}:policy/ais-permissions-boundaries"
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - redshift.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:aws:iam::${AWS::AccountId}:policy/AISSystemLogsPolicy
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess
+
+  RedShiftCluster:
+    Type: AWS::Redshift::Cluster
+    Properties:
+      AutomatedSnapshotRetentionPeriod: 1
+      ClusterIdentifier: !Sub ${AWS::StackName}
+      ClusterParameterGroupName: !Ref RedShiftParameterGroup
+      ClusterSubnetGroupName: !Ref RedShiftSubnetGroup
+      ClusterType: !Ref ClusterType
+      DBName: !Ref DBName
+      Encrypted: true
+      IamRoles:
+        - !GetAtt RedShiftClusterRole.Arn
+      # KmsKeyId: String
+      # LoggingProperties:
+      #   BucketName: redshift-logging-s3-bucket
+      #   S3KeyPrefix: redshift-log
+      MasterUsername: !Sub "{{resolve:secretsmanager:${RedShiftSecret}:SecretString:username}}"
+      MasterUserPassword: !Sub "{{resolve:secretsmanager:${RedShiftSecret}:SecretString:password}}"
+      NodeType: !Ref NodeType
+      NumberOfNodes:
+        !If [IsMultiNodeCluster, !Ref NumberOfNodes, !Ref "AWS::NoValue"]
+      Port: !Ref Port
+      PreferredMaintenanceWindow: mon:03:00-mon:04:00
+      PubliclyAccessible: false
+      VpcSecurityGroupIds:
+        - !Ref RedShiftSecurityGroup
+
+  RedShiftParameterGroup:
+    Type: AWS::Redshift::ClusterParameterGroup
+    Properties:
+      Description: RedShift Custom Parameter Group
+      ParameterGroupFamily: redshift-1.0
+      Parameters:
+        - ParameterName: require_ssl
+          ParameterValue: "true"
+
+  RedShiftSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: RedShift Cluster Security Group
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: 0.0.0.0/0
+      SecurityGroupIngress:
+        - IpProtocol: TCP
+          FromPort: !Ref Port
+          ToPort: !Ref Port
+          CidrIp: !ImportValue ais-provided-vpc-VPCCIDR
+      VpcId: !ImportValue ais-provided-vpc-VPCID
+
+  RedShiftSubnetGroup:
+    Type: AWS::Redshift::ClusterSubnetGroup
+    Properties:
+      Description: RedShift SubnetGroup
+      SubnetIds:
+        - !ImportValue ais-provided-vpc-PrivSubnet1
+        - !ImportValue ais-provided-vpc-PrivSubnet2
+        - !ImportValue ais-provided-vpc-PrivSubnet3
+
+  RedShiftSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${AWS::StackName}-RedShift-Secret"
+      Description: !Sub "Secret for ${AWS::StackName} RedShift instance"
+      #KmsKeyId: !Ref KeyId
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "redshiftadmin"}'
+        GenerateStringKey: "password"
+        PasswordLength: 64
+        ExcludeCharacters: '"@/\ '
+
+Outputs:
+  RedShiftSecretARN:
+    Description: ARN of the created RedShift Secret
+    Value: !Ref RedShiftSecret
+    Export:
+      Name: !Sub "${AWS::StackName}-Secret"
+
+  RedShiftCluster:
+    Description: RedShift Cluster
+    Value: !Ref RedShiftCluster
+    Export:
+      Name: !Sub "${AWS::StackName}-Cluster"
+
+  RedShiftSG:
+    Description: RedShift SG
+    Value: !Ref RedShiftSecurityGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-SG"
+
+  Endpoint:
+    Description: Endpoint address
+    Value: !GetAtt RedShiftCluster.Endpoint.Address
+    Export:
+      Name: !Sub "${AWS::StackName}-Endpoint"
+
+  Port:
+    Description: Port
+    Value: !GetAtt RedShiftCluster.Endpoint.Port
+    Export:
+      Name: !Sub "${AWS::StackName}-Port"

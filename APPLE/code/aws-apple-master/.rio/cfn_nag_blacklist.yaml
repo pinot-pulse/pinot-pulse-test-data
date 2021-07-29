@@ -1,0 +1,44 @@
+---
+RulesToSuppress:
+  - id: W2
+    reason: Security Groups found with cidr open to world on ingress.  This should never be true on instance.  Permissible on ELB
+  - id: W5
+    reason: Security Groups found with cidr open to world on egress
+  - id: W9
+    reason: Security Groups found with ingress cidr that is not /32
+  - id: W11
+    reason: IAM role should not allow * resource on its permissions policy
+  - id: W27
+    reason: Security Groups found ingress with port range instead of just a single port
+  - id: W28
+    reason: Resource found with an explicit name, this disallows updates that require replacement of this resource
+  - id: W29
+    reason: Security Groups found egress with port range instead of just a single port
+  - id: W35
+    reason: S3 Bucket should have access logging configured
+  - id: W36
+    reason: Security group rules without a description obscure their purpose and may lead to bad practices in ensuring they only allow traffic from the ports and sources/destinations required
+  - id: W40
+    reason: Security Groups egress with an IpProtocol of -1 found
+  - id: W41
+    reason: S3 Bucket should have encryption option set
+  - id: W42
+    reason: Security Groups ingress with an ipProtocol of -1 found
+  - id: W43
+    reason: IAM role should not have AdministratorAccess policy
+  - id: W47
+    reason: SNS Topic should specify KmsMasterKeyId property
+  - id: W52
+    reason: Elastic Load Balancer V2 should have access logging enabled
+  - id: W58
+    reason: Lambda functions require permission to write CloudWatch Logs
+  - id: W73
+    reason: DynamoDB table should have billing mode set to either PAY_PER_REQUEST or PROVISIONED
+  - id: W77
+    reason: Secrets Manager Secret should explicitly specify KmsKeyId. Besides control of the key this will allow the secret to be shared cross-account
+  - id: F3
+    reason: IAM role should not allow * action on its permissions policy
+  - id: F38
+    reason: IAM role should not allow * resource with PassRole action on its permissions policy
+  - id: F1000
+    reason: Missing egress rule means all traffic is allowed outbound. Make this explicit if it is desired configuration

@@ -1,0 +1,25 @@
+dev:
+  account: 1234567890
+  role: admin
+  region: us-west-2
+  bucket_name: scheduled-lambda-s3-example
+  function_name: test_example_function
+  role_name: test-role
+  lambda_handler: handler
+  lambda_runtime: nodejs12.x
+  create_bucket: true
+  lambda_zip: '/workspace/app.zip'
+  schedule: rate(5 days)
+
+qa:
+  account: 98765432109
+  role: admin
+  region: us-west-2
+  bucket_name: scheduled-lambda-s3-example
+  function_name: test_example_function
+  role_name: test-role
+  lambda_handler: handler
+  lambda_runtime: nodejs12.x
+  create_bucket: true
+  lambda_zip: '/workspace/app.zip'
+  schedule: rate(5 days)

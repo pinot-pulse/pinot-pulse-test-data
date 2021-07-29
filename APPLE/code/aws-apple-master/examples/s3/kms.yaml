@@ -1,0 +1,50 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: KMS Key
+
+Parameters:
+  IamRoles:
+    Type: List<String>
+    Description: List if IAM Roles who can use this Key.
+    Default: ""
+
+Conditions:
+  IamRoles: !Not [!Equals [!Join [",", !Ref IamRoles], ""]]
+
+Resources:
+  KMSKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: KMS Key to Encrypt the S3 Bucket
+      EnableKeyRotation: true
+      KeyPolicy:
+        Id: KeyPolicy
+        Version: "2012-10-17"
+        Statement:
+          - Sid: Enable IAM User Permissions
+            Effect: Allow
+            Principal:
+              AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+            Action: kms:*
+            Resource: "*"
+          - !If
+            - IamRoles
+            - Sid: Allow IAM Roles usage of the key
+              Effect: Allow
+              Principal:
+                AWS: !Ref IamRoles
+                Service: s3.amazonaws.com
+              Action:
+                - kms:Encrypt
+                - kms:Decrypt
+                - kms:ReEncrypt*
+                - kms:GenerateDataKey*
+                - kms:DescribeKey
+              Resource: "*"
+            - !Ref "AWS::NoValue"
+
+Outputs:
+  KeyArn:
+    Description: Encryption Key
+    Value: !GetAtt KMSKey.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-KeyArn"

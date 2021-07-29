@@ -1,0 +1,104 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: ElastiCache@Apple - Replication Group
+
+Parameters:
+  ClusterEngine:
+    Type: String
+    MinLength: 5
+    Default: "redis"
+
+  Port:
+    Type: Number
+    Default: 6379
+
+  EngineVersion:
+    Type: String
+    MinLength: 5
+    Default: "5.0.6"
+
+  NumCacheClusters:
+    Type: String
+    MinLength: 1
+    Default: "2"
+
+  CacheNodeType:
+    Type: String
+    MinLength: 3
+    Default: "cache.m3.medium"
+
+Resources:
+  ReplicationGroup:
+    Type: AWS::ElastiCache::ReplicationGroup
+    Properties:
+      ReplicationGroupDescription: "Example ElasticCache Replication Group"
+      NumCacheClusters: !Ref NumCacheClusters
+      Engine: !Ref ClusterEngine
+      Port: !Ref Port
+      CacheNodeType: !Ref CacheNodeType
+      AutoMinorVersionUpgrade: true
+      AutomaticFailoverEnabled: true
+      CacheSubnetGroupName: !Ref CacheSubnetGroup
+      EngineVersion: !Ref EngineVersion
+      AtRestEncryptionEnabled: true
+      TransitEncryptionEnabled: true
+      AuthToken: !Sub "{{resolve:secretsmanager:${CacheAuthToken}:SecretString:authToken}}"
+      SecurityGroupIds:
+        - !Ref SecurityGroup
+        - !ImportValue ais-shared-services-sg-SS-SG
+
+  CacheSubnetGroup:
+    Type: AWS::ElastiCache::SubnetGroup
+    Properties:
+      Description: "Cache Subnet Group"
+      SubnetIds:
+        - !ImportValue ais-provided-vpc-PrivSubnet1
+        - !ImportValue ais-provided-vpc-PrivSubnet2
+        - !ImportValue ais-provided-vpc-PrivSubnet3
+
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security Group for Example Replication Group
+      SecurityGroupIngress:
+        - Description: Ingress from vpc to elasticache port
+          CidrIp: !ImportValue ais-provided-vpc-VPCCIDR
+          FromPort: !Ref Port
+          ToPort: !Ref Port
+          IpProtocol: tcp
+      SecurityGroupEgress:
+        - Description: Open egress to VPC
+          CidrIp: !ImportValue ais-provided-vpc-VPCCIDR
+          FromPort: 0
+          ToPort: 65535
+          IpProtocol: tcp
+      VpcId: !ImportValue ais-provided-vpc-VPCID
+
+  CacheAuthToken:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${AWS::StackName}-cache-auth-token"
+      Description: !Sub "Auth token for ${AWS::StackName} ElastiCache"
+      GenerateSecretString:
+        SecretStringTemplate: "{}"
+        GenerateStringKey: "authToken"
+        PasswordLength: 41
+        ExcludePunctuation: true
+
+Outputs:
+  CachePrimaryEndpoint:
+    Description: Internal endpoint for the cache cluster
+    Value: !GetAtt [ReplicationGroup, PrimaryEndPoint.Address]
+    Export:
+      Name: !Sub "${AWS::StackName}-Cache-PrimaryEndpoint"
+
+  CachePort:
+    Description: Port that the cache engine is listening on
+    Value: !Ref Port
+    Export:
+      Name: !Sub "${AWS::StackName}-Cache-Port"
+
+  CacheAuthTokenARN:
+    Description: ARN of the created Auth Token
+    Value: !Ref CacheAuthToken
+    Export:
+      Name: !Sub "${AWS::StackName}-cache-auth-token"

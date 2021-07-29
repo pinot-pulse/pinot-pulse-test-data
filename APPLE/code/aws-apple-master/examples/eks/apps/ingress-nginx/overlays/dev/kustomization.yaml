@@ -1,0 +1,7 @@
+kind: ""
+apiversion: ""
+patchesStrategicMerge:
+- deployment.yaml
+- service-nlb.yaml
+bases:
+- ../../base

@@ -1,0 +1,166 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: S3 Bucket
+
+Parameters:
+  BucketName:
+    Type: String
+    Description: Name of Source S3 bucket
+  KeyId:
+    Type: String
+    Description: KMS Key ARN
+    Default: ""
+  EnableCrr:
+    Type: String
+    Description: Enable cross region replication
+    AllowedValues:
+      - true
+      - false
+    Default: false
+  CrrBucketName:
+    Type: String
+    Description: Name of Source S3 bucket
+    Default: DUMMY_CRR_BUCKET_NAME
+  CrrKeyId:
+    Type: String
+    Description: Encryption KMS Key Id for Destination S3 Bucket
+    Default: ""
+  WhitelistPrincipals:
+    Type: List<String>
+    Description: List of AWS Principals to whitelist
+    Default: ""
+  WhitelistIP:
+    Type: List<String>
+    Description: List of IP address that can interact with the bucket
+    Default: ""
+
+Conditions:
+  Whitelist: !Not [!Equals [!Join [",", !Ref WhitelistPrincipals], ""]]
+  ShouldEnableCrr: !Equals [true, !Ref EnableCrr]
+  AESKey:  !Equals [!Ref KeyId, ""]
+  IpRestriction: !Not [!Equals [!Join [",", !Ref WhitelistIP], ""]]
+
+Resources:
+  ReplicationRole:
+    Type: AWS::IAM::Role
+    Condition: ShouldEnableCrr
+    Properties:
+      PermissionsBoundary: !Sub "arn:aws:iam::${AWS::AccountId}:policy/ais-permissions-boundaries"
+      Policies:
+        - PolicyName: cross-region-replication-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetReplicationConfiguration
+                  - s3:ListBucket
+                Resource: !Sub "arn:aws:s3:::${BucketName}"
+              - Effect: Allow
+                Action:
+                  - s3:GetObjectVersion
+                  - s3:GetObjectVersionAcl
+                  - s3:GetObjectVersionTagging
+                Resource: !Sub "arn:aws:s3:::${BucketName}/*"
+              - Effect: Allow
+                Action:
+                  - s3:ReplicateObject
+                  - s3:ReplicateDelete
+                  - s3:ReplicateTags
+                Resource: !Sub "arn:aws:s3:::${CrrBucketName}/*"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Principal:
+              Service: s3.amazonaws.com
+
+  MyBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref BucketName
+      # S3 bucket must have versioning enabled.
+      VersioningConfiguration:
+        Status: Enabled
+      # All S3 objects must be encrypted at rest.
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              !If
+                - AESKey
+                - SSEAlgorithm: "AES256"
+                - KMSMasterKeyID: !Ref KeyId
+                  SSEAlgorithm: "aws:kms"
+      ReplicationConfiguration: !If
+        - ShouldEnableCrr
+        - Role: !Sub ${ReplicationRole.Arn}
+          Rules:
+          - Id: "source-to-dest-crr"
+            Status: Enabled
+            Prefix: ""
+            SourceSelectionCriteria:
+              SseKmsEncryptedObjects:
+                Status: Enabled
+            Destination:
+              Bucket: !Sub "arn:aws:s3:::${CrrBucketName}"
+              EncryptionConfiguration:
+                ReplicaKmsKeyID: !Sub "${CrrKeyId}"
+        - !Ref "AWS::NoValue"
+
+  MyBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref MyBucket
+      PolicyDocument:
+        Statement:
+          - Sid: Deny Insecure Traffic
+            Effect: "Deny"
+            Action:
+              - "s3:*"
+            Principal: "*"
+            Resource: !Sub "arn:aws:s3:::${MyBucket}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+          - !If
+            - IpRestriction
+            - Sid: Restrict access to whitelisted IP addresses
+              Effect: "Deny"
+              Action:
+                - "s3:*"
+              Principal: "*"
+              Resource: !Sub "arn:aws:s3:::${MyBucket}/*"
+              Condition:
+                StringNotEquals:
+                  aws:sourceVpce: !ImportValue ais-provided-vpc-VPCS3Endpoint
+                IpAddress:
+                  aws:SourceIp: 0.0.0.0/0
+                NotIpAddress:
+                  aws:SourceIp: !Ref WhitelistIP
+            - !Ref "AWS::NoValue"
+          - !If
+            - Whitelist
+            - Sid: Restrict access to whitelisted IP addresses
+              Effect: "Deny"
+              Action:
+                - "s3:*"
+              Principal: "*"
+              Resource: !Sub "arn:aws:s3:::${MyBucket}/*"
+              Condition:
+                StringNotEquals:
+                  aws:sourceVpce: !ImportValue ais-provided-vpc-VPCS3Endpoint
+                StringNotEqualsIgnoreCase:
+                  aws: !Ref WhitelistPrincipals
+            - !Ref "AWS::NoValue"
+
+  UpdateS3VPCEndpoint:
+    Type: Custom::VpcEndpointUpdater
+    Properties:
+      ServiceToken: !ImportValue VpcEndpointUpdaterARN
+      VpcEndpointId: !ImportValue ais-provided-vpc-VPCS3Endpoint
+      Principal: "*"
+      Action: "s3:*"
+      Effect: "Allow"
+      Resource:
+        - !Sub ${MyBucket.Arn}
+        - !Sub ${MyBucket.Arn}/*

@@ -1,0 +1,37 @@
+# Start with an identifier that adheres to S3 naming restrictions
+S3_COMPLIANT_USERNAME=$(echo "${USER//_/-}" | awk '{print tolower($0)}')
+ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text)
+S3_COMPLIANT_NAME="${ACCOUNT_ID:0:4}-$S3_COMPLIANT_USERNAME"
+REGION_CFG=$(aws configure get region||true)
+REGION=${AWS_DEFAULT_REGION:-$REGION_CFG}
+
+length=${#S3_COMPLIANT_NAME}
+if (( $length > 15 ))
+then
+   # "Username longer than 15 chars, truncating"
+   S3_COMPLIANT_NAME="${S3_COMPLIANT_NAME:0:15}"
+fi
+
+# Define global names
+#
+# Note that there are character limits on the names for certain resources.
+# We've set these up so that you should not have any problems, however
+# be aware that if you change the COMMON_NAME to something longer, your NLB
+# stack will often fail at the TargetGroup creation because of the 32 character
+# limit.
+COMMON_NAME=multitier
+ARTIFACT_BUCKET="$COMMON_NAME-artifacts-$S3_COMPLIANT_NAME-$REGION"
+
+length=${#ARTIFACT_BUCKET}
+if (( $length > 63 ))
+then
+   echo "the max for a s3 bucket is 63, please reduce the COMMON_NAME var and try again" && false
+fi
+
+PREREQ_STACK_NAME="$COMMON_NAME-prereqs-$S3_COMPLIANT_NAME"
+PIPELINE_STACK_NAME="$COMMON_NAME-pipeline-$S3_COMPLIANT_NAME"
+CODEPIPELINE_BUCKET_NAME="$PIPELINE_STACK_NAME-$REGION"
+ASG_STACK_NAME="$COMMON_NAME-pl-asg-${S3_COMPLIANT_NAME:0:10}"
+NLB_STACK_NAME="$COMMON_NAME-pl-nlb-${S3_COMPLIANT_NAME:0:10}"
+VPCE_STACK_NAME="$COMMON_NAME-pl-vpce-${S3_COMPLIANT_NAME:0:10}"
+ARTIFACT_ZIP_NAME=$COMMON_NAME.zip

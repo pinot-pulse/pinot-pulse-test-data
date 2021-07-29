@@ -1,0 +1,159 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: RDS@Apple
+Parameters:
+  DBName:
+    Description: The DB Name
+    Type: String
+    Default: RDSAtApple
+
+  InstanceClass:
+    Description: DB instance class that will be used for primary and all replicas
+    Type: String
+    Default: db.t3.small
+
+  RDSStorage:
+    Description: The amount in GB of storage on the RDS instance
+    Type: Number
+    Default: 100
+
+  DBEngine:
+    Description: Select Database Engine
+    Type: String
+    Default: mysql
+    AllowedValues: ["mysql", "postgres"]
+
+  BackupRetentionPeriod:
+    Description: Backup retention period (in days). Must be between 1 - 35
+    Type: Number
+    Default: 31
+    MinValue: 1
+    MaxValue: 35
+
+Mappings:
+  DBEngines:
+    mysql:
+      version: 8.0.16
+      port: 3306
+      parameterGroupFamily: mysql8.0
+    postgres:
+      version: 11.4
+      port: 5432
+      parameterGroupFamily: postgres11
+
+Conditions:
+  isMySQL: !Equals [!Ref DBEngine, mysql]
+  isPostgres: !Equals [!Ref DBEngine, postgres]
+
+Resources:
+  RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub "${AWS::StackName}-rds-sg"
+      VpcId: !ImportValue ais-provided-vpc-VPCID
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !FindInMap [DBEngines, !Ref DBEngine, port]
+          ToPort: !FindInMap [DBEngines, !Ref DBEngine, port]
+          CidrIp: !ImportValue ais-provided-vpc-VPCCIDR
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: !ImportValue ais-provided-vpc-VPCCIDR
+
+  RDSSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${AWS::StackName}-rds-secrets"
+      Description: !Sub "Secret for ${AWS::StackName} RDS instance"
+      #KmsKeyId: !Ref KeyId
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "rdsatappleadmin"}'
+        GenerateStringKey: "password"
+        PasswordLength: 41
+        ExcludeCharacters: '"@/\'
+
+  DatabaseSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: !Sub "${AWS::StackName}"
+      SubnetIds:
+        - !ImportValue ais-provided-vpc-PrivSubnet1
+        - !ImportValue ais-provided-vpc-PrivSubnet2
+        - !ImportValue ais-provided-vpc-PrivSubnet3
+
+  MySQLParameterGroup:
+    Type: AWS::RDS::DBParameterGroup
+    Condition: isMySQL
+    Properties:
+      Description: CloudFormation Sample Parameter Group
+      Family: !FindInMap [DBEngines, !Ref DBEngine, parameterGroupFamily]
+      Parameters:
+        max_connect_errors: "8388608"
+        max_connections: "100"
+
+  PostgresParameterGroup:
+    Type: AWS::RDS::DBParameterGroup
+    Condition: isPostgres
+    Properties:
+      Description: CloudFormation Sample Parameter Group
+      Family: !FindInMap [DBEngines, !Ref DBEngine, parameterGroupFamily]
+
+  RDSPrimary:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBName: !Ref DBName
+      DBInstanceIdentifier: !Sub ${AWS::StackName}
+      Engine: !Ref DBEngine
+      EngineVersion: !FindInMap [DBEngines, !Ref DBEngine, version]
+      BackupRetentionPeriod: !Ref BackupRetentionPeriod
+      DeletionProtection: true
+      Port: !FindInMap [DBEngines, !Ref DBEngine, port]
+      PreferredBackupWindow: "02:00-03:00"
+      PreferredMaintenanceWindow: mon:03:00-mon:04:00
+      DBSubnetGroupName: !Sub "${DatabaseSubnetGroup}"
+      VPCSecurityGroups:
+        - !Ref RDSSecurityGroup
+      EnableIAMDatabaseAuthentication: True
+      MasterUsername: !Sub "{{resolve:secretsmanager:${RDSSecret}:SecretString:username}}"
+      MasterUserPassword: !Sub "{{resolve:secretsmanager:${RDSSecret}:SecretString:password}}"
+      StorageEncrypted: True
+      AutoMinorVersionUpgrade: True
+      PubliclyAccessible: False
+      DBInstanceClass: !Sub "${InstanceClass}"
+      AllocatedStorage: !Ref RDSStorage
+      StorageType: gp2
+      MultiAZ: True
+      DBParameterGroupName:
+        !If [isMySQL, !Ref MySQLParameterGroup, !Ref PostgresParameterGroup]
+
+Outputs:
+  InstanceId:
+    Description: InstanceId of the newly created RDS Instance
+    Value: !Ref RDSPrimary
+    Export:
+      Name: !Sub "${AWS::StackName}-Instance"
+
+  EndpointAddress:
+    Description: DB endpoint Uri
+    Value: !GetAtt RDSPrimary.Endpoint.Address
+    Export:
+      Name: !Sub "${AWS::StackName}-Endpoint"
+
+  EndpointPort:
+    Description: Endpoint port
+    Value: !GetAtt RDSPrimary.Endpoint.Port
+    Export:
+      Name: !Sub "${AWS::StackName}-Port"
+
+  RDSSecretARN:
+    Description: ARN of the created RDS Secret
+    Value: !Ref RDSSecret
+    Export:
+      Name: !Sub "${AWS::StackName}-Secret"
+
+  RDSSG:
+    Description: RDS SG
+    Value: !Ref RDSSecurityGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-SG"

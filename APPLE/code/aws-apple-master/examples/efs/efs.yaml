@@ -1,0 +1,194 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: This template creates an Amazon Elastic File System for Linux based workloads with mount targets in all AZ's
+
+Parameters:
+  PerformanceMode:
+    Type: String
+    AllowedValues:
+    - generalPurpose
+    - maxIO
+    Default: generalPurpose
+  StunnelTLSPort:
+    Description: stunnel port number to connect to EFS using TLS
+    Type: String
+    Default: "2049"
+  StunnelTLSMountHelperPortRangeFrom:
+    Description: stunnel port number used by mount helper
+    Type: String
+    Default: "20049"
+  StunnelTLSMountHelperPortRangeTo:
+    Description: stunnel port number used by mount helper
+    Type: String
+    Default: "20449"  
+  DbSubnetIpBlocks: 
+    Description: Comma-delimited list of three CIDR blocks
+    Type: CommaDelimitedList
+    Default: "10.71.0.0/18, 10.71.64.0/18, 100.71.128.0/18"
+
+Resources:
+
+# Use KMS key for encryption
+  key:
+    Type: AWS::KMS::Key
+    Properties:
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: 2012-10-17
+        Id: key-default-1
+        Statement:
+          - Sid: Allow administration of the key
+            Effect: Allow
+            Principal:
+              AWS: !Join 
+                - ''
+                - - 'arn:aws:iam::'
+                  - !Ref 'AWS::AccountId'
+                  - ':root'
+            Action:
+              - 'kms:*'
+            Resource: '*'
+
+# Allow NFS mount from EC2 instances via security group
+  MountTarget1SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId:
+        Fn::ImportValue: ais-provided-vpc-VPCID
+      GroupDescription: Security group for mount target
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort:
+          Ref: StunnelTLSPort
+        ToPort:
+          Ref: StunnelTLSPort
+        CidrIp: !Select [0, !Ref DbSubnetIpBlocks]
+      SecurityGroupEgress:
+      - IpProtocol: tcp
+        FromPort:
+          Ref: StunnelTLSPort
+        ToPort:
+          Ref: StunnelTLSPort
+        CidrIp: !Select [0, !Ref DbSubnetIpBlocks]
+      - IpProtocol: tcp
+        FromPort:
+          Ref: StunnelTLSMountHelperPortRangeFrom
+        ToPort:
+          Ref: StunnelTLSMountHelperPortRangeTo
+        CidrIp: !Select [0, !Ref DbSubnetIpBlocks]           
+
+  MountTarget2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId:
+        Fn::ImportValue: ais-provided-vpc-VPCID
+      GroupDescription: Security group for mount target
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort:
+          Ref: StunnelTLSPort
+        ToPort:
+          Ref: StunnelTLSPort
+        CidrIp: !Select [1, !Ref DbSubnetIpBlocks]
+      SecurityGroupEgress:
+      - IpProtocol: tcp
+        FromPort:
+          Ref: StunnelTLSPort
+        ToPort:
+          Ref: StunnelTLSPort
+        CidrIp: !Select [1, !Ref DbSubnetIpBlocks]
+      - IpProtocol: tcp
+        FromPort:
+          Ref: StunnelTLSMountHelperPortRangeFrom
+        ToPort:
+          Ref: StunnelTLSMountHelperPortRangeTo
+        CidrIp: !Select [1, !Ref DbSubnetIpBlocks]           
+  
+  MountTarget3SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId:
+        Fn::ImportValue: ais-provided-vpc-VPCID
+      GroupDescription: Security group for mount target
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort:
+          Ref: StunnelTLSPort
+        ToPort:
+          Ref: StunnelTLSPort
+        CidrIp: !Select [2, !Ref DbSubnetIpBlocks]
+      SecurityGroupEgress:
+      - IpProtocol: tcp
+        FromPort:
+          Ref: StunnelTLSPort
+        ToPort:
+          Ref: StunnelTLSPort
+        CidrIp: !Select [2, !Ref DbSubnetIpBlocks]
+      - IpProtocol: tcp
+        FromPort:
+          Ref: StunnelTLSMountHelperPortRangeFrom
+        ToPort:
+          Ref: StunnelTLSMountHelperPortRangeTo
+        CidrIp: !Select [2, !Ref DbSubnetIpBlocks]           
+
+# Create EFS file system
+  FileSystem:
+    Type: AWS::EFS::FileSystem
+    #DependsOn:
+    #- Key
+    Properties:
+      Encrypted: true
+      KmsKeyId: !GetAtt 
+        - key
+        - Arn
+      PerformanceMode:
+        Ref: PerformanceMode
+# Create multiple Mount targets in each AZ  
+  MountTarget1:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId:
+        Ref: FileSystem
+      SubnetId:
+        Fn::ImportValue: ais-provided-vpc-PrivSubnet1
+      SecurityGroups:
+      - Ref: MountTarget1SecurityGroup
+  MountTarget2:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId:
+        Ref: FileSystem
+      SubnetId:
+        Fn::ImportValue: ais-provided-vpc-PrivSubnet2
+      SecurityGroups:
+      - Ref: MountTarget2SecurityGroup
+  MountTarget3:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId:
+        Ref: FileSystem
+      SubnetId:
+        Fn::ImportValue: ais-provided-vpc-PrivSubnet3
+      SecurityGroups:
+      - Ref: MountTarget3SecurityGroup
+
+Outputs:  
+  FileSystem:
+    Description: File System ID
+    Value:
+      Ref: FileSystem
+  MountTarget1:
+    Description: MountTarget 1
+    Value:
+      Ref: MountTarget1
+  MountTarget2:
+    Description: MountTarget 2
+    Value:
+      Ref: MountTarget2
+  MountTarget3:
+    Description: MountTarget 3
+    Value:
+      Ref: MountTarget3
+  KeyId:
+    Value: !GetAtt 
+      - key
+      - Arn    

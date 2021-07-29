@@ -1,0 +1,14 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cluster-autoscaler
+  namespace: kube-system
+spec:
+  template:
+    spec:
+      containers:
+        - name: cluster-autoscaler
+          envFrom:
+            - configMapRef:
+                name: proxy-environment-variables

@@ -1,0 +1,32 @@
+---
+# ------------------- Dashboard Deployment ------------------- #
+
+kind: Deployment
+apiVersion: apps/v1
+metadata:
+  labels:
+    k8s-app: kubernetes-dashboard
+  name: kubernetes-dashboard
+spec:
+  replicas: 3
+  template:
+    spec:
+      containers:
+      - name: kubernetes-dashboard
+        args:
+          - --tls-cert-file=tls.crt
+          - --tls-key-file=tls.key
+---
+# ------------------- Dashboard Service ------------------- #
+
+kind: Service
+apiVersion: v1
+metadata:
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-internal: 0.0.0.0/0
+    service.beta.kubernetes.io/aws-load-balancer-type: nlb
+  labels:
+    k8s-app: kubernetes-dashboard
+  name: kubernetes-dashboard
+spec:
+  type: LoadBalancer

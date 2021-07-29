@@ -1,0 +1,13 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: proxy-environment-variables
+  namespace: kube-system
+data:
+  HTTPS_PROXY: http://proxy.config.pcp.local:3128
+  HTTP_PROXY: http://proxy.config.pcp.local:3128
+  NO_PROXY: localhost,127.0.0.1,169.254.169.254,${VPC_CIDR},10.100.0.0/16,.internal,.apple.com,.execute-api.${AWS_REGION}.amazonaws.com,.s3.${AWS_REGION}.amazonaws.com,.${AWS_REGION}.eks.amazonaws.com,.${AWS_REGION}.vpce.amazonaws.com,amazonlinux.${AWS_REGION}.amazonaws.com,api.sagemaker.${AWS_REGION}.amazonaws.com,cloudformation.${AWS_REGION}.amazonaws.com,cloudtrail.${AWS_REGION}.amazonaws.com,codebuild-fips.${AWS_REGION}.amazonaws.com,codebuild.${AWS_REGION}.amazonaws.com,config.${AWS_REGION}.amazonaws.com,dynamodb.${AWS_REGION}.amazonaws.com,ec2.${AWS_REGION}.amazonaws.com,ec2messages.${AWS_REGION}.amazonaws.com,elasticloadbalancing.${AWS_REGION}.amazonaws.com,events.${AWS_REGION}.amazonaws.com,kinesis.${AWS_REGION}.amazonaws.com,kms.${AWS_REGION}.amazonaws.com,logs.${AWS_REGION}.amazonaws.com,monitoring.${AWS_REGION}.amazonaws.com,runtime.sagemaker.${AWS_REGION}.amazonaws.com,secretsmanager.${AWS_REGION}.amazonaws.com,servicecatalog.${AWS_REGION}.amazonaws.com,sns.${AWS_REGION}.amazonaws.com,ssm.${AWS_REGION}.amazonaws.com,ssmmessages.${AWS_REGION}.amazonaws.com,sts.${AWS_REGION}.amazonaws.com
+  https_proxy: http://proxy.config.pcp.local:3128
+  http_proxy: http://proxy.config.pcp.local:3128
+  no_proxy: localhost,127.0.0.1,169.254.169.254,${VPC_CIDR},10.100.0.0/16,.internal,.apple.com,.execute-api.${AWS_REGION}.amazonaws.com,.s3.${AWS_REGION}.amazonaws.com,.${AWS_REGION}.eks.amazonaws.com,.${AWS_REGION}.vpce.amazonaws.com,amazonlinux.${AWS_REGION}.amazonaws.com,api.sagemaker.${AWS_REGION}.amazonaws.com,cloudformation.${AWS_REGION}.amazonaws.com,cloudtrail.${AWS_REGION}.amazonaws.com,codebuild-fips.${AWS_REGION}.amazonaws.com,codebuild.${AWS_REGION}.amazonaws.com,config.${AWS_REGION}.amazonaws.com,dynamodb.${AWS_REGION}.amazonaws.com,ec2.${AWS_REGION}.amazonaws.com,ec2messages.${AWS_REGION}.amazonaws.com,elasticloadbalancing.${AWS_REGION}.amazonaws.com,events.${AWS_REGION}.amazonaws.com,kinesis.${AWS_REGION}.amazonaws.com,kms.${AWS_REGION}.amazonaws.com,logs.${AWS_REGION}.amazonaws.com,monitoring.${AWS_REGION}.amazonaws.com,runtime.sagemaker.${AWS_REGION}.amazonaws.com,secretsmanager.${AWS_REGION}.amazonaws.com,servicecatalog.${AWS_REGION}.amazonaws.com,sns.${AWS_REGION}.amazonaws.com,ssm.${AWS_REGION}.amazonaws.com,ssmmessages.${AWS_REGION}.amazonaws.com,sts.${AWS_REGION}.amazonaws.com

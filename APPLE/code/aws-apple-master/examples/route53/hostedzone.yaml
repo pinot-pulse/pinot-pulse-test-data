@@ -1,0 +1,17 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Route53 Hosted Zone
+Parameters:
+  HostedZoneName:
+    Description: Hosted Zone Name
+    Type: String
+Resources:
+  DNS:
+    Type: "AWS::Route53::HostedZone"
+    Properties:
+      HostedZoneConfig:
+        Comment: "HostedZoneName - Hosted Zone"
+      Name: !Ref HostedZoneName
+      VPCs:
+        -
+          VPCId: !ImportValue ais-provided-vpc-VPCID
+          VPCRegion: !Ref AWS::Region

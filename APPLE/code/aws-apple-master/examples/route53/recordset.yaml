@@ -1,0 +1,26 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Route53 record sets
+Parameters:
+  HZName:
+    Description: Hosted Zone name
+    Type: String
+  NameRecord:
+    Description: Name record for CNAME entry
+    Type: String
+  RecordType:
+    Description: Hosted Zone record type (A, CNAME, etc)
+    Type: String
+    Default: CNAME
+  ResourceRecord:
+    Description: VPC-E DNS name to tie to CNAME record
+    Type: String
+Resources:
+  MyRecordSet:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneName: !Ref HZName
+      Name: !Ref NameRecord
+      Type: !Ref RecordType
+      TTL: 300
+      ResourceRecords:
+      - !Ref ResourceRecord

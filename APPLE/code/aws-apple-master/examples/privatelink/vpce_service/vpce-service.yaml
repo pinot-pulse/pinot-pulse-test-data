@@ -1,0 +1,95 @@
+
+AWSTemplateFormatVersion: "2010-09-09"
+Description: VPC-Endpoint Service Template
+
+Parameters:
+  FrontendPort:
+    Type: String
+    Description: Port to associate with the load balancer (front end)
+    Default: 443
+  BackendPort:
+    Type: String
+    Description: Port to associate with the load balancer (back end)
+    Default: 443
+  AppInstanceID:
+    Type: String
+    Description: App EC2 instance ID to access over PrivateLink
+  # AppInstanceID2:
+  #   Type: String
+  #   Description: App EC2 instance ID to access over PrivateLink
+  # AppInstanceID3:
+  #   Type: String
+  #   Description: App EC2 instance ID to access over PrivateLink
+  AllowedPrincipal:
+    Type: String
+    Description: 'AWS Account ID of where the service should be advertised'
+Resources:
+  loadbalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: "internal"
+      Subnets:
+        - !ImportValue ais-provided-vpc-PrivSubnet1
+        - !ImportValue ais-provided-vpc-PrivSubnet2
+        - !ImportValue ais-provided-vpc-PrivSubnet3
+      Type: network
+  listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref targetgroup
+      LoadBalancerArn: !Ref loadbalancer
+      Port: !Ref FrontendPort
+      Protocol: TCP
+  targetgroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Port: !Ref BackendPort
+      Protocol: TCP
+      TargetType: instance
+      Targets:
+        - Id: !Ref AppInstanceID
+        # - Id: !Ref AppInstanceID2
+        # - Id: !Ref AppInstanceID3
+      VpcId: !ImportValue ais-provided-vpc-VPCID
+# The VPC Endpoint Service
+  EndpointService:
+    Type: AWS::EC2::VPCEndpointService
+    Properties:
+      NetworkLoadBalancerArns:
+        - !Ref loadbalancer
+      AcceptanceRequired: True
+  EndpointServicePermission:
+    Type: AWS::EC2::VPCEndpointServicePermissions
+    Properties:
+      ServiceId: !Ref 'EndpointService'
+      AllowedPrincipals:
+        # - !Ref AllowedPrincipal
+        - !Sub 'arn:aws:iam::${AllowedPrincipal}:root'
+Outputs:
+  LoadBalancerName:
+    Description: Load balancer name
+    Value:
+        Ref: loadbalancer
+    Export:
+      Name: !Sub "${AWS::StackName}-ELB-Name"
+  LoadBalancerDNSName:
+    Description: Load balancer DNS name
+    Value:
+        Fn::GetAtt:
+          - loadbalancer
+          - DNSName
+    Export:
+      Name: !Sub "${AWS::StackName}-NLB-DNS"
+  TargetGroupID:
+    Description: Target Group for sharing across CFTs
+    Value:
+      Ref: targetgroup
+    Export:
+      Name: !Sub "${AWS::StackName}-TG-ID"
+  VpcEndpointServiceName:
+      Description: The VPC Endpoint Service
+      Value: !Ref EndpointService
+      Export:
+        Name: !Sub "${AWS::StackName}-VPCE-Service-Name"

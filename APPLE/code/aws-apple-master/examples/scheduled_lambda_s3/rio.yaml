@@ -1,0 +1,57 @@
+schemaVersion: 2.0
+
+notify:
+  email:
+    enabled: true
+  pullRequestComment:
+    postOnSuccess: true
+    postOnFailure: true
+
+timeout: 10
+
+# build machine properties
+secrets:
+  names:
+    - <Your secrets.properties file for system account>
+
+machine:
+  baseImage: <Your base image containing the orchestrator CLI>
+
+builds:
+
+- name: deploy-scheduled-lambda-dev
+  branchName: master
+  trigger:
+    gitPush: false
+  build:
+    template: freestyle:v4:build
+    steps:
+      - zip app.zip index.js
+      - orch provision dev --secrets-file=$BUILD_SECRETS_PATH/secrets.properties
+
+- name: cleanup-scheduled-lambda-dev
+  branchName: master
+  trigger:
+    gitPush: false
+  build:
+    template: freestyle:v4:build
+    steps:
+      - orch cleanup dev --secrets-file=$BUILD_SECRETS_PATH/secrets.properties
+
+- name: deploy-scheduled-lambda-qa
+  branchName: master
+  trigger:
+    gitPush: false
+  build:
+    template: freestyle:v4:build
+    steps:
+      - orch provision qa --secrets-file=$BUILD_SECRETS_PATH/secrets.properties
+
+- name: cleanup-scheduled-lambda-qa
+  branchName: master
+  trigger:
+    gitPush: false
+  build:
+    template: freestyle:v4:build
+    steps:
+      - orch cleanup qa --secrets-file=$BUILD_SECRETS_PATH/secrets.properties

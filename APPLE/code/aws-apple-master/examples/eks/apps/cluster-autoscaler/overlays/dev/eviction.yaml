@@ -1,0 +1,8 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cluster-autoscaler
+  namespace: kube-system
+  annotations:
+    cluster-autoscaler.kubernetes.io/safe-to-evict: "false"

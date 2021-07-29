@@ -1,0 +1,158 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Security: KMS customer managed CMK for AWS services template'. Prerequisite to run cs-operations-alert.yaml.
+Metadata:
+  'AWS::CloudFormation::Interface':
+    ParameterGroups:
+    - Label:
+        default: 'KMS Parameters'
+      Parameters:
+      - Service
+Parameters:
+  ParentAlertStack:
+    Description: 'Optional but recommended stack name of parent alert stack based on cs-operations-alert.yaml template.'
+    Type: String
+    Default: 'cs-notification-sns' ###CHANGE
+  Service:
+    Description: 'Which AWS service is allowed to use this CMK?'
+    Type: String
+    AllowedValues:
+    - lambda
+    - ec2
+    - s3
+    - ssm
+    Default: ec2
+Conditions:
+  HasAlertTopic: !Not [!Equals [!Ref ParentAlertStack, '']]
+#build mappings
+Mappings:
+  AccountMappings:
+    "243383093692":
+      AccountArn:
+        - arn:aws:iam::243383093692:root #CHANGE
+        - arn:aws:iam::243383093692:role/AWS-SystemsManager-AutomationExecutionRole #CHANGE
+  GrantMappings:
+    "243383093692":
+      AccountArn:
+        - arn:aws:iam::243383093692:role/AWS-SystemsManager-AutomationExecutionRole #CHANGE ADD MORE ACCOUNTS
+
+#build resources
+Resources:
+  Key:
+    Type: "AWS::KMS::Key"
+    Properties:
+      Description: !Sub pact/kmskey/${Service}
+      Enabled: true
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: "2012-10-17"
+        Id: "KMSKeyPolicy"
+        Statement:
+          -
+            Sid: "Enable IAM User Permissions"
+            Effect: "Allow"
+            Principal:
+              AWS:
+              - !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Action: "kms:*"
+            Resource: "*"
+          -
+             Sid: "Allow administration of the key"
+             Effect: "Allow"
+             Principal:
+              AWS:
+              - !Sub "arn:aws:iam::${AWS::AccountId}:role/cs-eks-admin"
+             Action:
+              - "kms:Create*"
+              - "kms:Describe*"
+              - "kms:Enable*"
+              - "kms:List*"
+              - "kms:Put*"
+              - "kms:Update*"
+              - "kms:Revoke*"
+              - "kms:Disable*"
+              - "kms:Get*"
+              - "kms:Delete*"
+              - "kms:ScheduleKeyDeletion"
+              - "kms:CancelKeyDeletion"
+             Resource: "*"
+          -
+             Sid: "Allow use of the key"
+             Effect: "Allow"
+             Principal:
+              AWS: !FindInMap [AccountMappings, !Ref "AWS::AccountId", AccountArn]
+             Action:
+               - "kms:ListKeys"
+               - "kms:Encrypt"
+               - "kms:Decrypt"
+               - "kms:ReEncrypt*"
+               - "kms:GenerateDataKey*"
+               - "kms:DescribeKey"
+             Resource: "*"
+             Condition:
+              StringEquals:
+                kms:ViaService:
+                - !Sub ${Service}.${AWS::Region}.amazonaws.com
+          -
+             Sid: "Allow attachment of persistent resources"
+             Effect: "Allow"
+             Principal:
+              AWS: !FindInMap [GrantMappings, !Ref "AWS::AccountId", AccountArn]
+             Action:
+               - "kms:CreateGrant"
+               - "kms:ListGrants"
+               - "kms:RevokeGrant"
+             Resource: "*"
+             Condition:
+              Bool:
+                kms:GrantIsForAWSResource: true
+
+#build alias
+  KeyAlias:
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Type: 'AWS::KMS::Alias'
+    Properties:
+      AliasName: !Sub alias/cs/kms/${Service}  #CHANGE
+      TargetKeyId: !Ref Key
+  DeletionNotification:
+    Condition: HasAlertTopic
+    Type: 'AWS::Events::Rule'
+    Properties:
+      EventPattern:
+        source:
+        - 'aws.kms'
+        'detail-type':
+        - 'AWS API Call via CloudTrail'
+        resources:
+        - !GetAtt Key.Arn
+        detail:
+          eventSource:
+          - 'kms.amazonaws.com'
+          'eventName':
+          - ScheduleKeyDeletion
+          - DisableKey
+      State: ENABLED
+      Targets:
+      - Arn: {'Fn::ImportValue': !Sub '${ParentAlertStack}-TopicARN'}
+        Id: rule
+Outputs:
+  TemplateID:
+    Description: 'cs kms template id.'
+    Value: 'cs-kmskey'
+  TemplateVersion:
+    Description: 'template version'
+    Value: '1.0'
+  StackName:
+    Description: 'Stack name.'
+    Value: !Sub '${AWS::StackName}'
+  KeyId:
+    Description: 'Key id.'
+    Value: !Ref Key
+    Export:
+      Name: !Sub '${AWS::StackName}-KeyId'
+  KeyArn:
+    Description: 'Key ARN.'
+    Value: !GetAtt 'Key.Arn'
+    Export:
+      Name: !Sub '${AWS::StackName}-KeyArn'

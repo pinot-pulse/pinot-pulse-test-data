@@ -1,0 +1,6 @@
+# LF (not CRLF) for line endings
+* text eol=lf
+*.png binary
+*.key binary
+*.pptx binary
+*.potx binary

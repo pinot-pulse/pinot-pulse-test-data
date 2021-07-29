@@ -1,0 +1,138 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: ECS@Apple - Cluster
+
+Parameters:
+  ClusterName:
+    Type: String
+    MinLength: 3
+
+  LaunchType:
+    Description: Launch Type
+    Type: String
+    Default: EC2
+    AllowedValues:
+      - EC2
+      - FARGATE
+
+  NodeImageId:
+    Description: AMI Id
+    Type: "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>"
+    Default: "/AIS/AMI/AmazonECS2Linux/Id"
+
+  NodeInstanceType:
+    Description: EC2 instance type for the node instances
+    Type: String
+    Default: t3.medium
+
+  NodeAutoScalingGroupMinSize:
+    Description: Minimum size of Node Group ASG
+    Type: Number
+    Default: 1
+
+  NodeAutoScalingGroupMaxSize:
+    Description: Maximum size of Node Group ASG. Set to at least 1 greater than NodeAutoScalingGroupDesiredCapacity.
+    Type: Number
+    Default: 3
+
+  NodeAutoScalingGroupDesiredCapacity:
+    Description: Desired capacity of Node Group ASG
+    Type: Number
+    Default: 1
+
+Conditions:
+  isEC2: !Equals [!Ref LaunchType, "EC2"]
+
+Resources:
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Ref ClusterName
+
+  NodeGroup:
+    Condition: isEC2
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      LaunchConfigurationName: !Ref NodeLaunchConfig
+      DesiredCapacity: !Ref NodeAutoScalingGroupDesiredCapacity
+      MinSize: !Ref NodeAutoScalingGroupMinSize
+      MaxSize: !Ref NodeAutoScalingGroupMaxSize
+      VPCZoneIdentifier:
+        - !ImportValue ais-provided-vpc-PrivSubnet1
+        - !ImportValue ais-provided-vpc-PrivSubnet2
+        - !ImportValue ais-provided-vpc-PrivSubnet3
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-container-instance
+          PropagateAtLaunch: true
+
+  NodeLaunchConfig:
+    Condition: isEC2
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      AssociatePublicIpAddress: false
+      IamInstanceProfile: !Ref NodeInstanceProfile
+      ImageId: !Ref NodeImageId
+      InstanceType: !Ref NodeInstanceType
+      SecurityGroups:
+        - !Ref NodeSecurityGroup
+        - !ImportValue ais-shared-services-sg-SS-SG
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -xe
+
+          # Configure proxies
+          /opt/tools/bin/configure_proxy.sh
+          set -a && source /etc/environment
+
+          # Configure ECS Agent
+          mkdir -p /etc/ecs
+          echo "ECS_CLUSTER=${ClusterName}" >> /etc/ecs/ecs.config
+
+  NodeSecurityGroup:
+    Condition: isEC2
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub "${AWS::StackName} SG"
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: 0.0.0.0/0
+      SecurityGroupIngress:
+        - IpProtocol: "udp"
+          FromPort: 53
+          ToPort: 53
+          CidrIp: !ImportValue ais-provided-vpc-VPCCIDR
+      VpcId: !ImportValue ais-provided-vpc-VPCID
+
+  NodeInstanceProfile:
+    Condition: isEC2
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - Ref: NodeInstanceRole
+
+  NodeInstanceRole:
+    Condition: isEC2
+    Type: AWS::IAM::Role
+    Properties:
+      PermissionsBoundary: !Sub "arn:aws:iam::${AWS::AccountId}:policy/ais-permissions-boundaries"
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:aws:iam::${AWS::AccountId}:policy/AISSystemLogsPolicy
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role
+
+Outputs:
+  Cluster:
+    Export:
+      Name: !Sub "${AWS::StackName}-Cluster"
+    Value: !Ref Cluster

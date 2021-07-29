@@ -1,0 +1,129 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Elasticsearch Service @ Apple
+Parameters:
+  ElasticsearchDomainName:
+    Description: Name of the Elasticsearch Domain you wish to create.
+    Type: String
+    MinLength : 3
+    MaxLength : 28
+    AllowedPattern : ^[a-z][a-z0-9-]+$
+    Default : 'elasticsearchatapple'
+  ElasticsearchVersion:
+    Description: 'Elasticsearch version'
+    Type: String
+    Default: '7.1'
+    AllowedValues: ['7.1', '6.8', '6.7', '6.5', '6.4', '6.3', '6.2', '6.0', '5.6', '5.5'] 
+  InstanceType:
+    Description: 'Instance type for data nodes'
+    Type: 'String'
+    Default: 'r5.large.elasticsearch'
+  InstanceCount:
+    Description: 'Number of data nodes (instances) for Amazon ES domain'
+    Type: Number
+    Default: 1
+  DedicatedMasterCount:
+    Description: 'The number of dedicated master nodes (instances) to use in the Amazon ES domain (set to 0 to disable dedicated master nodes).'
+    Type: Number
+    Default: 0
+  DedicatedMasterType:
+    Description: 'The instance type for your dedicated master nodes.'
+    Type: 'String'
+    Default: 'r5.large.elasticsearch'    
+  EBSVolumeSize:
+    Description: 'The size of the EBS volume for each data node. The minimum and maximum size of an EBS volume depends on the EBS volume type and the instance type to which it is attached.'
+    Type: Number
+    Default: 10
+  EBSEnabled:
+    Description: 'Specifies whether Amazon EBS volumes are attached to data nodes in the Amazon ES domain (some instance types come with instance store that you can use instead).'
+    Type: String
+    AllowedValues: [true, false]    
+    Default: true
+ # AdminRoleARN:
+ #   Description: 'AdminRole ARN to provide full access to the cluster'
+ #   Type: 'String'
+ # DeveloperRoleARN:
+ #   Description: 'DeveloperRole ARN to provide HTTP API access'
+ #   Type: 'String'
+    
+Conditions:
+    IsSingleClusterInstance: !Equals [!Ref InstanceCount, '1']
+   
+
+Resources:
+    ElasticsearchSecurityGroup:
+     Type: AWS::EC2::SecurityGroup
+     Properties:
+      GroupDescription: !Sub "${AWS::StackName}-ess-sg"
+      VpcId: !ImportValue ais-provided-vpc-VPCID
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: !ImportValue ais-provided-vpc-VPCCIDR
+    ElasticsearchDomain:
+        Type: AWS::Elasticsearch::Domain
+        Properties:
+            DomainName: !Ref ElasticsearchDomainName
+            ElasticsearchVersion: !Ref ElasticsearchVersion
+            EBSOptions:
+                EBSEnabled: !Ref EBSEnabled
+                VolumeSize: !Ref EBSVolumeSize
+                VolumeType: gp2
+            ElasticsearchClusterConfig:
+                DedicatedMasterEnabled: !If [IsSingleClusterInstance, false, true]
+                InstanceCount: !Ref InstanceCount 
+                ZoneAwarenessEnabled: !If [IsSingleClusterInstance, false, true]
+                InstanceType: !Ref InstanceType
+                DedicatedMasterType: !If [ IsSingleClusterInstance, !Ref 'AWS::NoValue', !Ref DedicatedMasterType]
+                DedicatedMasterCount: !If [ IsSingleClusterInstance, !Ref 'AWS::NoValue', !Ref DedicatedMasterCount]
+            NodeToNodeEncryptionOptions:    
+                Enabled: true
+            EncryptionAtRestOptions:
+                Enabled: true
+            SnapshotOptions:
+                AutomatedSnapshotStartHour: 1
+            AccessPolicies:
+                Version: 2012-10-17
+                Statement:
+                    -
+                        Effect: Allow
+                        Principal: 
+                            AWS: '*'
+                        Action: es:*
+                        Resource: !Join ["",["arn:aws:es:",!Ref 'AWS::Region',":",!Ref 'AWS::AccountId',":",domain/,!Ref ElasticsearchDomainName,/*]]
+                # Advanced access policy - Admin role gets access across the domain. Developer role access is limited to HTTP calls                    
+                #    -
+                #        Effect: Allow
+                #        Principal: 
+                #            AWS: !Ref AdminRoleARN
+                #        Action: es:*
+                #        Resource: !Join ["",["arn:aws:es:",!Ref 'AWS::Region',":",!Ref 'AWS::AccountId',":",domain/,!Ref ElasticsearchDomainName,/*]]
+                #    -
+                #        Effect: Allow
+                #        Principal: 
+                #            AWS: !Ref DeveloperRoleARN
+                #        Action: es:ESHttp*
+                #        Resource: !Join ["",["arn:aws:es:",!Ref 'AWS::Region',":",!Ref 'AWS::AccountId',":",domain/,!Ref ElasticsearchDomainName,/*]]    
+            AdvancedOptions:
+                rest.action.multi.allow_explicit_index: "false"
+            VPCOptions : 
+                SubnetIds : !If
+                            - IsSingleClusterInstance
+                            - - !ImportValue ais-provided-vpc-PrivSubnet1
+                            - - !ImportValue ais-provided-vpc-PrivSubnet1
+                              - !ImportValue ais-provided-vpc-PrivSubnet2
+                 
+                SecurityGroupIds: [!Ref ElasticsearchSecurityGroup]
+            
+                
+Outputs:
+    ElasticsearchEndpoint:
+        Description: The endpoint of the Elasticsearch Domain
+        Value: !GetAtt [ElasticsearchDomain,DomainEndpoint]
+        Export : 
+            Name : !Sub ${AWS::StackName}-ElasticsearchEndpoint
+    ESSSG:
+        Description: ESS SG
+        Value: !Ref ElasticsearchSecurityGroup
+        Export:
+            Name: !Sub "${AWS::StackName}-SG"

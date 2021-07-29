@@ -1,0 +1,4 @@
+---
+- op: replace
+  path: /spec/template/spec/containers/0/command/6
+  value: --node-group-auto-discovery=asg:tag=k8s.io/cluster-autoscaler/enabled,k8s.io/cluster-autoscaler/<YOUR CLUSTER NAME>

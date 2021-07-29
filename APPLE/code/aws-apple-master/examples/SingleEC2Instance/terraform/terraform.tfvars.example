@@ -1,0 +1,6 @@
+ec2_name      = "EC2Instance"
+aws_profile   = "dev"
+aws_region    = "us-west-2"
+instance_type = "t3.micro"
+az_number     = "1"
+image_id      = "/AIS/AMI/AmazonLinux2/Id"

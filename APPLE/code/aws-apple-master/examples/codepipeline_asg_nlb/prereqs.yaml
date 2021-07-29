@@ -1,0 +1,49 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Artifacts S3 bucket creation for multitier-app
+
+Parameters:
+  BucketName:
+    Type: String
+    Description: 'bucket name'
+
+Resources:
+  MyBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Properties:
+      BucketName: !Ref BucketName
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+
+  MyBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref MyBucket
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: DenyUploadIfNotEncrypted
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource: !Sub 'arn:aws:s3:::${MyBucket}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: false
+
+  UpdateS3VPCEndpoint:
+    Type: Custom::VpcEndpointUpdater
+    Properties:
+      ServiceToken: !ImportValue VpcEndpointUpdaterARN
+      VpcEndpointId: !ImportValue ais-provided-vpc-VPCS3Endpoint
+      Principal: '*'
+      Action: 's3:*'
+      Effect: 'Allow'
+      Resource: [
+        !GetAtt MyBucket.Arn,
+        !Join [ "", [ !GetAtt MyBucket.Arn, "/*" ] ]
+      ]

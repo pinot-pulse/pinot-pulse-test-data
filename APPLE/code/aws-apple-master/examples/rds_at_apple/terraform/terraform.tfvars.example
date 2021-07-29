@@ -1,0 +1,7 @@
+aws_profile              = "dev"
+aws_region               = "us-west-2"
+rds_db_name              = "mydb"
+rds_db_engine            = "mysql"
+rds_db_instance_class    = "db.t3.small"
+rds_db_allocated_storage = 100
+rds_db_master_username   = "rdsatappleadmin"

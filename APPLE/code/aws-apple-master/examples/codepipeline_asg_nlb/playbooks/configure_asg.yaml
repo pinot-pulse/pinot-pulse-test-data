@@ -1,0 +1,73 @@
+---
+# Run this playbook by doing the following:
+#     ansible-playbook --connection=local -i "localhost," configure_asg.yml
+
+- hosts: all
+  environment:
+    HTTP_PROXY: http://proxy.config.pcp.local:3128
+    HTTPS_PROXY: https://proxy.config.pcp.local:3128
+
+  tasks:
+
+  - name: Yum Package Installations
+    yum:
+      name:
+        - python3-devel
+        - python3-pip
+    become: yes
+
+  - name: Pip Installations
+    pip:
+      name:
+        - flask
+        - gunicorn
+        - requests
+    become: yes
+
+  - name: Create www group
+    group:
+      name: www
+      state: present
+    become: yes
+
+  - name: Create www user
+    user:
+      name: www
+      home: /var/www
+      createhome: yes
+      group: www
+    become: yes
+
+  - name: Remove app direcgtory
+    file:
+      path: /var/www/app
+      state: absent
+    become: yes
+
+  - name: Move app into location
+    command: cp -r /tmp/artifact/app /var/www/
+    become: yes
+
+  - name: Fix app permissions
+    file:
+      path: /var/www/
+      state: directory
+      recurse: yes
+      mode: 0755
+    become: yes
+
+  - name: Install app init script (gunicorn)
+    copy:
+      src: /tmp/artifact/playbooks/files/app.service
+      dest: /etc/systemd/system/app.service
+      owner: root
+      group: root
+      mode: 0755
+    become: yes
+
+  - name: Enable and start app service
+    systemd:
+      name: app
+      enabled: yes
+      state: restarted
+    become: yes

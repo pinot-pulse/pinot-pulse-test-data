@@ -1,0 +1,77 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: AIS Customer Test Stack - LoadBalancing Stage
+
+Resources:
+
+#############################
+# The Network Load Balancer
+#
+# NOTE: In order to create a VPC Endpoint over the DirectConnect, you will need
+#       to ensure that your load balancer is using all three Availability Zones.
+#       That is defined in the Subnets block below. Besides,
+#       The Privatelinks tag with value: 'to be exposed via privatelinks', also
+#       included in the Tags section below.
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: internal
+      Type: network
+      Subnets:
+        - Fn::ImportValue: ais-provided-vpc-PrivSubnet1
+        - Fn::ImportValue: ais-provided-vpc-PrivSubnet2
+        - Fn::ImportValue: ais-provided-vpc-PrivSubnet3
+      Tags:
+        - Key: Name
+          Value:
+            Fn::Sub: "${AWS::StackName} Load Balancer"
+        - Key: Privatelinks
+          Value: to be exposed via privatelinks
+      LoadBalancerAttributes:
+        - Key: load_balancing.cross_zone.enabled
+          Value: "true"
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub '${AWS::StackName}-TG'
+      Port: 8080
+      Protocol: TCP
+      HealthCheckPort: "8080"
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: '20'
+      VpcId:
+        Fn::ImportValue: ais-provided-vpc-VPCID
+
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn:
+            Ref: TargetGroup
+      LoadBalancerArn: !Ref 'LoadBalancer'
+      Port: 8080
+      Protocol: TCP
+
+Outputs:
+  LoadBalancerName:
+    Description: Load balancer name
+    Value:
+        Ref: LoadBalancer
+    Export:
+      Name: !Sub "${AWS::StackName}-ELB-Name"
+  LoadBalancerDNSName:
+    Description: Load balancer DNS name
+    Value:
+        Fn::GetAtt:
+          - LoadBalancer
+          - DNSName
+    Export:
+      Name: !Sub "${AWS::StackName}-NLB-DNS"
+  TargetGroupID:
+    Description: Target Group for sharing across CFTs
+    Value:
+      Ref: TargetGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-TG-ID"

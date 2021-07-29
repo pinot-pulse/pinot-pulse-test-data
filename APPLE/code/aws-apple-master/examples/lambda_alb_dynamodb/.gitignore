@@ -1,0 +1,6 @@
+v-env
+__pycache__
+.pytest_cache
+app/pytest.ini
+app/.env
+*.zip
