@@ -1,0 +1,52 @@
+deployment:
+  env: qa4
+  deploymentStack: qa4
+  splunkIndex: cs_test_qa4
+  dataCenter: ""
+  containerRegistryURL: "434401270464.dkr.ecr.us-west-2.amazonaws.com/periscope-application:"
+  replicas: 2
+  maxSurge: 1
+  maxUnavailable: 0
+
+ingress:
+  host: aws-periscope-sh-qa4.apple.com
+  urlMapping: /
+
+resources:
+  limits:
+    cpu: 1
+    memory: 2Gi
+  requests:
+    cpu: 1
+    memory: 2Gi
+
+application:
+  JVMConfigs: "-Xms1024m -Xmx1024m -XX:MaxMetaspaceSize=256m -Xss2048k -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/apps/logs"
+  cookie: acack-uat
+  configs:
+    IDMSReturnValue: 14
+    brooklynWorkflowURL: https://brooklyn-workflow-qa4.corp.apple.com
+    brooklynGRPCServerHost: ma-brooklyn2-workflow-sh-qa4.corp.apple.com
+    logging:
+      logLevel: DEBUG
+      logConfigFile: log4j2-qa.xml
+    database:
+      cassandraKeySpaceName: qa4_brooklyn_activation
+      cassandraContactPoints: ma-iosscst-lcn01.corp.apple.com,ma-iosscst-lcn02.corp.apple.com,ma-iosscst-lcn03.corp.apple.com,ma-iosscst-lcn04.corp.apple.com,ma-iosscst-lcn05.corp.apple.com,ma-iosscst-lcn06.corp.apple.com
+      albertURL: "jdbc:oracle:thin:@(DESCRIPTION = (ADDRESS_LIST = (ADDRESS = (PROTOCOL = TCPS) (HOST = nc1-iphonesys-qa1-db01.corp.apple.com) (PORT = 1530))) (CONNECT_DATA = (SID = alb4t1t)))"
+      pool:
+        minIdle: 10
+        maxPoolSize: 50
+        maxLifeTime: 300000
+        connectionTimeout: 10000
+        idleTimeout: 600000
+    certificates:
+      sslServerKeyStore: periscope-ui-qa.jks
+      brooklyn:
+        keyAlias: periscope.brooklyn.client.qa
+        keyStore: periscope.brooklyn.client.qa.jks
+        keyStoreFileName: brooklyn-client.jks
+        trustStore: periscope.brooklyn.client.qa.truststore
+        trustStoreFileName: brooklyn-client.truststore
+      cassandra:
+        trustStorePath: CassandraTrustStore.jks

@@ -1,0 +1,37 @@
+apiVersion: v1
+data:
+  Corefile: |
+    .:53 {
+        errors
+        health
+        kubernetes cluster.local in-addr.arpa ip6.arpa {
+          pods insecure
+          fallthrough in-addr.arpa ip6.arpa
+        }
+        prometheus :9153
+        forward . /etc/resolv.conf
+        cache 30
+        loop
+        reload
+        loadbalance
+        hosts {
+          17.170.160.124 csi-tst-q22.it.att.com
+          17.170.160.99  csi-tst-q25.it.att.com
+          17.170.160.177 csi-tst-q28.it.att.com
+          17.170.161.102 pit02.api.t-mobile.com
+          17.170.161.101 pit01.api.t-mobile.com
+          17.170.160.202 qat05.api.t-mobile.com
+          17.170.160.35 vip-ssl-sqa1.verizonwireless.com
+          17.170.160.36 vip-ssl-sqa2.verizonwireless.com
+          17.170.160.37 vip-ssl-sqa3.verizonwireless.com
+          17.170.160.38 vip-ssl-sqa4.verizonwireless.com
+          fallthrough
+        }
+    }
+kind: ConfigMap
+metadata:
+  labels:
+    eks.amazonaws.com/component: coredns
+    k8s-app: kube-dns
+  name: coredns
+  namespace: kube-system

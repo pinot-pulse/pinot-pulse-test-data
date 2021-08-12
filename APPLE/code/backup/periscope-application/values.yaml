@@ -1,0 +1,40 @@
+#metadata
+namespace: cs-tools
+applicationName: periscope-application
+owner: carrier-services
+appType: cs-app
+appGroup: cs-tools
+serviceAccount:
+  # serviceAccount.create: Whether to create a service account or not
+  create: true
+  # serviceAccount.name: The name of the service account to create or use
+  name: "periscope-application-sa"
+
+
+deployment:
+  imageTag: 0.0.1b6028
+
+ports:
+  applicationPort: 8080
+  containerPort: 8080
+  servicePort: 9100
+
+probes:
+  timeoutSeconds: 5
+  startup:
+    pollingInterval: 10
+    failureThreshold: 12
+  readiness:
+    pollingInterval: 15
+    failureThreshold: 2
+  liveness:
+    pollingInterval: 30
+    failureThreshold: 2
+
+#Startup Parameters
+application:
+  configFiles: "file:///apps/configs/periscope-application-configs.properties,file:///apps/secrets/periscope-application-secrets.properties"
+  logPath: "/apps/logs"
+  tempDir: "/apps/periscope-application/tmp"
+  healthCheckPath: /health
+  healtheCheckRequestProtocol: HTTPS

@@ -1,0 +1,21 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-service
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: {{ .Values.applicationName }}
+    purpose: {{ .Values.deployment.env }}
+    owner: {{ .Values.owner }}
+    helmchart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
+    type: {{ .Values.appType }}
+    group: {{ .Values.appGroup }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: {{ .Values.applicationName }}-port
+      port: {{ .Values.ports.servicePort }}
+      targetPort: {{ .Values.ports.containerPort }}
+  selector:
+    app: {{ .Values.applicationName }}

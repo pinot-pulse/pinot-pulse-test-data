@@ -1,0 +1,140 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-deployment
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: {{ .Values.applicationName }}
+    purpose: {{ .Values.deployment.env }}
+    owner: {{ .Values.owner }}
+    build: {{ .Values.deployment.imageTag }}
+    helmchart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
+    type: {{ .Values.appType }}
+    group: {{ .Values.appGroup }}
+  annotations:
+    checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+spec:
+  replicas: {{ .Values.deployment.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: {{ .Values.deployment.maxUnavailable }}
+      maxSurge: {{ .Values.deployment.maxSurge }}
+  selector:
+    matchLabels:
+      app: {{ .Values.applicationName }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.applicationName }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      volumes:
+      - name: {{ .Values.applicationName }}-logs
+        emptyDir: {}
+      - name: splunkforwarder-temp
+        emptyDir: {}
+      - name: podinfo
+        downwardAPI:
+          items:
+            - path: "labels"
+              fieldRef:
+                fieldPath: metadata.labels
+            - path: "uid"
+              fieldRef:
+                fieldPath: metadata.uid
+      - name: {{ .Values.applicationName }}-configmap-volume
+        configMap:
+          name: {{ .Release.Name }}-configmap
+      - name: {{ .Values.applicationName }}-secrets-volume
+        secret:
+          secretName: {{ .Values.applicationName }}-secrets
+      - name: {{ .Values.applicationName }}-certs-volume
+        secret:
+          secretName: {{ .Values.applicationName }}-certs
+
+      containers:
+      - image: {{ .Values.deployment.containerRegistryURL }}{{ .Values.deployment.imageTag }}
+        name: {{ .Values.applicationName }}
+        env:
+          - name: DEPLOYMENT_ENV
+            value: {{ .Values.deployment.env }}
+          - name: DEPLOYMENT_STACK
+            value: {{ .Values.deployment.deploymentStack }}
+          - name: DC
+            value: {{ .Values.deployment.dataCenter }}
+          - name: CONFIG_FILES
+            value: {{ .Values.application.configFiles }}
+          - name: LOG_PATH
+            value: {{ .Values.application.logPath }}
+          - name: TEMP_DIR
+            value: {{ .Values.application.tempDir }}
+          - name: JVM_CONFIGS
+            value: {{ .Values.application.JVMConfigs }}
+        volumeMounts:
+        - name: {{ .Values.applicationName }}-logs
+          mountPath: /apps/logs
+        - name: {{ .Values.applicationName }}-configmap-volume
+          mountPath: /apps/configs
+        - name: {{ .Values.applicationName }}-secrets-volume
+          mountPath: /apps/secrets
+        - name: {{ .Values.applicationName }}-certs-volume
+          mountPath: /apps/certs
+        ports:
+        - containerPort: {{ .Values.ports.containerPort }}
+        startupProbe:
+          httpGet:
+            scheme: {{ .Values.application.healtheCheckRequestProtocol }}
+            path: {{ .Values.application.healthCheckPath }}
+            port: {{ .Values.ports.applicationPort }}
+          periodSeconds: {{ .Values.probes.startup.pollingInterval }}
+          failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+          timeoutSeconds: {{ .Values.probes.timeoutSeconds }}
+        readinessProbe:
+          httpGet:
+            scheme: {{ .Values.application.healtheCheckRequestProtocol }}
+            path: {{ .Values.application.healthCheckPath }}
+            port: {{ .Values.ports.applicationPort }}
+          periodSeconds: {{ .Values.probes.readiness.pollingInterval }}
+          failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          timeoutSeconds: {{ .Values.probes.timeoutSeconds }}
+        livenessProbe:
+          httpGet:
+            scheme: {{ .Values.application.healtheCheckRequestProtocol }}
+            path: {{ .Values.application.healthCheckPath }}
+            port: {{ .Values.ports.applicationPort }}
+          periodSeconds: {{ .Values.probes.liveness.pollingInterval }}
+          failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          timeoutSeconds: {{ .Values.probes.timeoutSeconds }}
+        resources:
+          limits:
+            cpu: {{ .Values.resources.limits.cpu }}
+            memory: {{ .Values.resources.limits.memory }}
+          requests:
+            cpu: {{ .Values.resources.requests.cpu }}
+            memory: {{ .Values.resources.requests.memory }}
+      - name: splunkforwarder
+        image: "docker.apple.com/splunk-ist/splunk-universalforwarder:latest"
+        env:
+          - name:  SPLUNK_CLUSTER
+            value: "ioss_us1_prod"
+          - name:  SPLUNK_LOG_MONITOR1
+            value: "/apps/logs/{{ .Values.applicationName }}/periscope-application-logs.log|{{ .Values.deployment.splunkIndex }}|{{ .Values.applicationName }}"
+          - name:  SPLUNK_LOG_MONITOR2
+            value: "/apps/logs/{{ .Values.applicationName }}/periscope-access-logs.log|{{ .Values.deployment.splunkIndex }}|{{ .Values.applicationName }}-access"
+        resources:
+          requests:
+            cpu:    200m
+            memory: 1Gi
+          limits:
+            cpu:    1
+            memory: 1Gi
+        volumeMounts:
+        - name: {{ .Values.applicationName }}-logs
+          mountPath: /apps/logs/{{ .Values.applicationName }}
+        - name: splunkforwarder-temp
+          mountPath: "/opt/splunkforwarder/var"
+        - name: podinfo
+          mountPath: "/etc/splunk/podinfo"
+          readOnly: true

@@ -1,0 +1,95 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-configmap
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: {{ .Values.applicationName }}
+    purpose: {{ .Values.deployment.env }}
+    owner: {{ .Values.owner }}
+    helmchart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
+    type: {{ .Values.appType }}
+    group: {{ .Values.appGroup }}
+
+data:
+  periscope-application-configs.properties: |
+
+    ## Port on which Periscope-application runs
+    server.port=8080
+
+    ## Certificates Location
+    certificates.path=/apps/certs
+
+    ## Logging related
+    logging.level.reactor.netty.http.client={{ .Values.application.configs.logging.logLevel }}
+    logging.config=classpath:{{ .Values.application.configs.logging.logConfigFile }}
+
+    ### Periscope base URL
+    periscope.ui.baseurl=https://{{ .Values.ingress.host }}
+
+    ### Periscope redirect URL after IDMS Authentication
+    idms.return.value={{ .Values.application.configs.IDMSReturnValue }}
+
+    ## Brooklyn
+    server.brooklyn.uri={{ .Values.application.configs.brooklynWorkflowURL }}
+
+    # GRPC
+    brooklyn.grpc.server.port=443
+    brooklyn.grpc.server.host={{ .Values.application.configs.brooklynGRPCServerHost }}
+
+    #######################
+    #### Certificates ####
+    #######################
+    server.ssl.key-store=${certificates.path}/{{ .Values.application.configs.certificates.sslServerKeyStore }}
+
+    periscope.brooklyn.client.keyAlias = {{ .Values.application.configs.certificates.brooklyn.keyAlias }}
+    periscope.brooklyn.client.keyStore = ${certificates.path}/{{ .Values.application.configs.certificates.brooklyn.keyStore }}
+    periscope.brooklyn.client.trustStore = ${certificates.path}/{{ .Values.application.configs.certificates.brooklyn.trustStore }}
+
+    brooklyn.keystore.filename=${certificates.path}/{{ .Values.application.configs.certificates.brooklyn.keyStoreFileName }}
+    brooklyn.truststore.filename=${certificates.path}/{{ .Values.application.configs.certificates.brooklyn.trustStoreFileName }}
+
+    cassandra.ssl.truststore.path=${certificates.path}/{{ .Values.application.configs.certificates.cassandra.trustStorePath }}
+
+    #######################
+
+    #######################
+    ### DB Connectivity ###
+    #######################
+
+    spring.data.cassandra.brooklyn.keyspace-name={{ .Values.application.configs.database.cassandraKeySpaceName }}
+    spring.data.cassandra.contact-points={{ .Values.application.configs.database.cassandraContactPoints }}
+
+    {{ if eq .Values.deployment.env "qa4" }}
+
+    albertQA4.datasource.url={{ .Values.application.configs.database.albertURL }}
+
+    {{ else if eq .Values.deployment.env "qa5" }}
+
+    albertQA5.datasource.url={{ .Values.application.configs.database.albertURL }}
+
+    {{ else if eq .Values.deployment.env "it" }}
+
+    albertIT.datasource.url={{ .Values.application.configs.database.albertURL }}
+
+    {{ else if eq .Values.deployment.env "maint" }}
+
+    albertMaint.datasource.url={{ .Values.application.configs.database.albertURL }}
+
+    {{ else if eq .Values.deployment.env "perf" }}
+
+    albertPerf1.datasource.url={{ .Values.application.configs.database.albertURL }}
+
+    {{ else }}
+
+    albertQA4.datasource.url={{ .Values.application.configs.database.albertURL }}
+
+    {{ end }}
+
+    datasource.minimumIdle={{ .Values.application.configs.database.pool.minIdle }}
+    datasource.maximumPoolSize={{ .Values.application.configs.database.pool.maxPoolSize }}
+    datasource.maxLifeTime={{ .Values.application.configs.database.pool.maxLifeTime }}
+    datasource.connectionTimeout={{ .Values.application.configs.database.pool.connectionTimeout }}
+    datasource.idleTimeout={{ .Values.application.configs.database.pool.idleTimeout }}
+
+    #######################
