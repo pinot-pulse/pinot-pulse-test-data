@@ -1,0 +1,41 @@
+{
+  "schemaName": "members",
+  "dimensionFieldSpecs": [
+    {"name": "member_id", "dataType": "STRING"},
+    {"name": "organization_id", "dataType": "STRING"},
+    {"name": "branch_id", "dataType": "STRING"},
+    {"name": "member_number", "dataType": "STRING"},
+    {"name": "first_name", "dataType": "STRING"},
+    {"name": "last_name", "dataType": "STRING"},
+    {"name": "email", "dataType": "STRING"},
+    {"name": "membership_status", "dataType": "STRING"},
+    {"name": "segment", "dataType": "STRING"},
+    {"name": "employment_status", "dataType": "STRING"},
+    {"name": "city", "dataType": "STRING"},
+    {"name": "state", "dataType": "STRING"},
+    {"name": "postal_code", "dataType": "STRING"}
+  ],
+  "metricFieldSpecs": [
+    {"name": "credit_score", "dataType": "INT"},
+    {"name": "risk_score", "dataType": "DOUBLE"},
+    {"name": "total_deposits", "dataType": "DOUBLE"},
+    {"name": "total_loans", "dataType": "DOUBLE"},
+    {"name": "total_relationship_value", "dataType": "DOUBLE"},
+    {"name": "annual_income", "dataType": "DOUBLE"}
+  ],
+  "dateTimeFieldSpecs": [
+    {
+      "name": "membership_date",
+      "dataType": "LONG",
+      "format": "1:MILLISECONDS:EPOCH",
+      "granularity": "1:DAYS"
+    },
+    {
+      "name": "created_at",
+      "dataType": "LONG",
+      "format": "1:MILLISECONDS:EPOCH",
+      "granularity": "1:MILLISECONDS"
+    }
+  ],
+  "primaryKeyColumns": ["member_id"]
+}

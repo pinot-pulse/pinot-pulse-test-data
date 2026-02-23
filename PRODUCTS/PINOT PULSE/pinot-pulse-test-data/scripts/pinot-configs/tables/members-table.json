@@ -1,0 +1,21 @@
+{
+  "tableName": "members",
+  "tableType": "OFFLINE",
+  "segmentsConfig": {
+    "replication": "1",
+    "schemaName": "members",
+    "timeColumnName": "created_at",
+    "timeType": "MILLISECONDS"
+  },
+  "tenants": {
+    "broker": "DefaultTenant",
+    "server": "DefaultTenant"
+  },
+  "tableIndexConfig": {
+    "invertedIndexColumns": ["organization_id", "membership_status", "segment", "state"],
+    "loadMode": "MMAP"
+  },
+  "metadata": {
+    "customConfigs": {}
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "schemaName": "transactions",
+  "dimensionFieldSpecs": [
+    {"name": "transaction_id", "dataType": "STRING"},
+    {"name": "organization_id", "dataType": "STRING"},
+    {"name": "member_id", "dataType": "STRING"},
+    {"name": "account_id", "dataType": "STRING"},
+    {"name": "branch_id", "dataType": "STRING"},
+    {"name": "transaction_type", "dataType": "STRING"},
+    {"name": "channel", "dataType": "STRING"},
+    {"name": "status", "dataType": "STRING"},
+    {"name": "description", "dataType": "STRING"},
+    {"name": "merchant_name", "dataType": "STRING"},
+    {"name": "merchant_category", "dataType": "STRING"},
+    {"name": "is_suspicious", "dataType": "BOOLEAN"}
+  ],
+  "metricFieldSpecs": [
+    {"name": "amount", "dataType": "DOUBLE"},
+    {"name": "balance_after", "dataType": "DOUBLE"},
+    {"name": "risk_score", "dataType": "DOUBLE"}
+  ],
+  "dateTimeFieldSpecs": [
+    {
+      "name": "timestamp",
+      "dataType": "LONG",
+      "format": "1:MILLISECONDS:EPOCH",
+      "granularity": "1:MILLISECONDS"
+    }
+  ],
+  "primaryKeyColumns": ["transaction_id"]
+}

@@ -1,0 +1,35 @@
+{
+  "schemaName": "accounts",
+  "dimensionFieldSpecs": [
+    {"name": "account_id", "dataType": "STRING"},
+    {"name": "organization_id", "dataType": "STRING"},
+    {"name": "member_id", "dataType": "STRING"},
+    {"name": "branch_id", "dataType": "STRING"},
+    {"name": "account_number", "dataType": "STRING"},
+    {"name": "account_type", "dataType": "STRING"},
+    {"name": "account_category", "dataType": "STRING"},
+    {"name": "status", "dataType": "STRING"},
+    {"name": "is_primary", "dataType": "BOOLEAN"}
+  ],
+  "metricFieldSpecs": [
+    {"name": "current_balance", "dataType": "DOUBLE"},
+    {"name": "available_balance", "dataType": "DOUBLE"},
+    {"name": "interest_rate", "dataType": "DOUBLE"},
+    {"name": "ytd_interest", "dataType": "DOUBLE"}
+  ],
+  "dateTimeFieldSpecs": [
+    {
+      "name": "opened_date",
+      "dataType": "LONG",
+      "format": "1:MILLISECONDS:EPOCH",
+      "granularity": "1:DAYS"
+    },
+    {
+      "name": "last_activity_date",
+      "dataType": "LONG",
+      "format": "1:MILLISECONDS:EPOCH",
+      "granularity": "1:DAYS"
+    }
+  ],
+  "primaryKeyColumns": ["account_id"]
+}
