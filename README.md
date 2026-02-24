@@ -1,12 +1,13 @@
 # Pinot Pulse Enterprise — Test Data Package
 
-End-to-end test datasets and loader scripts for the 3 primary ingestion pathways:
+End-to-end test datasets and loader scripts for 4 datasets across primary ingestion pathways:
 
 | # | Dataset | Records | Format | Target | Pinot Pulse Pipeline |
 |---|---------|---------|--------|--------|----------------------|
 | 1 | **Members** | 500 | CSV | AWS S3 | `S3Consumer` → batch ingestion |
 | 2 | **Accounts** | 800 | NDJSON | Google BigQuery | `BigQueryConnector` → warehouse sync |
 | 3 | **Transactions** | 5,000 | JSONL | Apache Kafka | `KafkaConsumer` → real-time streaming |
+| 4 | **Loans** | 350 | JSON | PostgreSQL | `load_postgres.py` → analytics.loans |
 
 All datasets use the **exact canonical schemas** from `ingestion/schemas/canonical/` and are scoped to a single test organization: **Midwest Community Credit Union** (`a1b2c3d4-e5f6-7890-abcd-ef1234567890`).
 
@@ -16,11 +17,11 @@ All datasets use the **exact canonical schemas** from `ingestion/schemas/canonic
 
 ```bash
 # 1. Install dependencies
-pip install boto3 google-cloud-bigquery kafka-python requests
+pip install boto3 google-cloud-bigquery kafka-python psycopg2-binary requests
 
 # 2. Configure credentials
 cp .env.example .env
-# Edit .env with your AWS, GCP, and Kafka credentials
+# Edit .env with your AWS, GCP, Kafka, and PostgreSQL credentials
 
 # 3. Generate datasets
 python3 generate_datasets.py
@@ -38,7 +39,7 @@ python3 generate_datasets.py
 
 ```
 test-data/
-├── generate_datasets.py        # Generates all 3 datasets
+├── generate_datasets.py        # Generates all 4 datasets
 ├── run_all.sh                  # Master orchestrator script
 ├── .env.example                # Environment config template
 ├── README.md                   # This file
@@ -48,11 +49,14 @@ test-data/
 │   ├── accounts.ndjson         # 800 accounts (BigQuery target)
 │   ├── accounts.json           # Same data in JSON
 │   ├── transactions.jsonl      # 5,000 transactions (Kafka target)
+│   ├── loans.json              # 350 loans (PostgreSQL target)
+│   ├── loans.ndjson            # Same data in NDJSON
 │   └── metadata.json           # Dataset metadata
 └── scripts/
     ├── load_s3.py              # AWS S3 uploader
     ├── load_bigquery.py        # BigQuery loader
     ├── load_kafka.py           # Kafka producer
+    ├── load_postgres.py        # PostgreSQL loader (loans + regulatory tables)
     └── verify_ingestion.py     # End-to-end verification
 ```
 
@@ -105,12 +109,45 @@ python3 scripts/load_kafka.py \
 python3 scripts/load_kafka.py --dry-run
 ```
 
+### PostgreSQL Loader (Loans + Regulatory Tables)
+```bash
+# Connection test
+python3 scripts/load_postgres.py --test
+
+# Load loans dataset into analytics.loans
+python3 scripts/load_postgres.py --loans
+
+# Seed all 9 regulatory tables
+python3 scripts/load_postgres.py --regulatory
+
+# Full run: loans + all regulatory tables
+python3 scripts/load_postgres.py --all
+
+# Custom database URL
+python3 scripts/load_postgres.py --all --db-url postgresql://user:pass@localhost:5432/pinotpulse
+```
+
+The `load_postgres.py` script seeds 9 regulatory tables required by the compliance and reporting modules:
+
+| # | Table | Description |
+|---|-------|-------------|
+| 1 | `regulatory.ncua_call_reports` | NCUA 5300 call report data |
+| 2 | `regulatory.bsa_ctr_filings` | BSA currency transaction reports |
+| 3 | `regulatory.bsa_sar_filings` | BSA suspicious activity reports |
+| 4 | `regulatory.hmda_lar` | HMDA loan application register |
+| 5 | `regulatory.cra_assessments` | CRA community reinvestment assessments |
+| 6 | `regulatory.reg_d_tracking` | Regulation D transfer tracking |
+| 7 | `regulatory.ofac_screening_log` | OFAC sanctions screening results |
+| 8 | `regulatory.reg_e_disputes` | Regulation E electronic fund disputes |
+| 9 | `regulatory.tila_disclosures` | Truth in Lending Act disclosures |
+
 ### Verification
 ```bash
 python3 scripts/verify_ingestion.py --all       # Check everything
 python3 scripts/verify_ingestion.py --s3         # S3 only
 python3 scripts/verify_ingestion.py --bigquery   # BigQuery only
 python3 scripts/verify_ingestion.py --kafka      # Kafka only
+python3 scripts/verify_ingestion.py --postgres   # PostgreSQL only
 python3 scripts/verify_ingestion.py --pinot      # Apache Pinot tables
 python3 scripts/verify_ingestion.py --api        # Pinot Pulse API
 ```
@@ -143,6 +180,14 @@ Kafka (txns.jsonl)  │  KafkaConsumer (kafka.py)               │
                     │    → DLQ for failed records             │
                     │    ─────> PostgreSQL analytics.txns     │
                     │    ─────> Apache Pinot txns (REALTIME)  │
+                    │                                         │
+PostgreSQL (loans)  │  load_postgres.py (direct load)         │
+  ───────────────>  │    → schema validation                  │
+                    │    → 350 loan records → analytics.loans │
+                    │    → 9 regulatory tables seeded         │
+                    │    ─────> PostgreSQL analytics.loans    │
+                    │    ─────> PostgreSQL regulatory.*       │
+                    │    ─────> Apache Pinot loans table      │
                     └─────────────────────────────────────────┘
 ```
 
@@ -197,7 +242,12 @@ These ingestion pipeline YAML files in the codebase define how Pinot Pulse proce
 - ~2% flagged as suspicious (risk_score >= 80)
 - Realistic merchant data for card transactions
 - Sorted by timestamp (90-day window)
-# pinot-pulse-test-data
-# pinot-pulse-test-data
-# pinot-pulse-test-data
-# pinot-pulse-test-data
+
+### Loans (350 records)
+- 6 loan types: auto_loan, mortgage, personal_loan, credit_card, home_equity, student_loan
+- Loan amounts calibrated by type (mortgage: $50K-$500K, personal: $1K-$50K)
+- Interest rates by type and risk tier (auto: 3.5-12.9%, mortgage: 5.0-8.5%)
+- Loan statuses: current (65%), paid_off (15%), delinquent (10%), default (5%), in_collections (5%)
+- Linked to active members via member_id
+- Origination dates spanning 10-year window
+- Regulatory fields: HMDA action_taken, TILA apr_disclosed, CRA assessment_area

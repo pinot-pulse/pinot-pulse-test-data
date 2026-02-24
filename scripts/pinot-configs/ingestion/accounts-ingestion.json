@@ -1,0 +1,32 @@
+{
+  "jobType": "SegmentCreationAndTarPush",
+  "inputDirURI": "file:///data/accounts",
+  "includeFileNamePattern": "glob:**/*.json",
+  "outputDirURI": "file:///data/accounts/output",
+  "overwriteOutput": true,
+  "pinotFSSpecs": [
+    {
+      "scheme": "file",
+      "className": "org.apache.pinot.spi.filesystem.LocalPinotFS"
+    }
+  ],
+  "recordReaderSpec": {
+    "dataFormat": "json",
+    "className": "org.apache.pinot.plugin.inputformat.json.JSONRecordReader"
+  },
+  "tableSpec": {
+    "tableName": "accounts",
+    "schemaURI": "http://localhost:9000/schemas/accounts",
+    "tableConfigURI": "http://localhost:9000/tables/accounts"
+  },
+  "pinotClusterSpecs": [
+    {
+      "controllerURI": "http://localhost:9000"
+    }
+  ],
+  "pushJobSpec": {
+    "pushAttempts": 2,
+    "pushParallelism": 1,
+    "pushRetryIntervalMillis": 1000
+  }
+}

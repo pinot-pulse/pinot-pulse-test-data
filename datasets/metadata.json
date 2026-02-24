@@ -1,0 +1,32 @@
+{
+  "organization_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "organization_name": "Midwest Community Credit Union",
+  "generated_at": "2026-02-24T14:19:02.857857+00:00",
+  "datasets": {
+    "members": {
+      "file": "members.csv",
+      "records": 500,
+      "target": "s3"
+    },
+    "accounts": {
+      "file": "accounts.ndjson",
+      "records": 800,
+      "target": "bigquery"
+    },
+    "loans": {
+      "file": "loans.json",
+      "records": 350,
+      "target": "postgresql"
+    },
+    "transactions": {
+      "file": "transactions.jsonl",
+      "records": 5000,
+      "target": "kafka"
+    }
+  },
+  "branch_ids": [
+    "b0001000-0000-0000-0000-000000000001",
+    "b0001000-0000-0000-0000-000000000002",
+    "b0001000-0000-0000-0000-000000000003"
+  ]
+}

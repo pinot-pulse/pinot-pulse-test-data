@@ -1,0 +1,21 @@
+{
+  "tableName": "accounts",
+  "tableType": "OFFLINE",
+  "segmentsConfig": {
+    "replication": "1",
+    "schemaName": "accounts",
+    "timeColumnName": "opened_date",
+    "timeType": "MILLISECONDS"
+  },
+  "tenants": {
+    "broker": "DefaultTenant",
+    "server": "DefaultTenant"
+  },
+  "tableIndexConfig": {
+    "invertedIndexColumns": ["organization_id", "account_type", "account_category", "status"],
+    "loadMode": "MMAP"
+  },
+  "metadata": {
+    "customConfigs": {}
+  }
+}
