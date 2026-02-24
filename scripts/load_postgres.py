@@ -29,10 +29,17 @@ def main():
     parser.add_argument("--host", default=os.getenv("POSTGRES_HOST", "localhost"))
     parser.add_argument("--port", type=int, default=int(os.getenv("POSTGRES_PORT", "5433")))
     parser.add_argument("--user", default=os.getenv("POSTGRES_USER", "pinot_pulse"))
-    parser.add_argument("--password", default=os.getenv("POSTGRES_PASSWORD", "pulse_secure_2024"))
+    parser.add_argument("--password", default=os.getenv("POSTGRES_PASSWORD"),
+                        help="PostgreSQL password (or set POSTGRES_PASSWORD env var)")
     parser.add_argument("--database", default=os.getenv("POSTGRES_DB", "pinot_pulse"))
     parser.add_argument("--test", action="store_true", help="Connection test only")
     args = parser.parse_args()
+
+    if not args.password:
+        db_url = os.getenv("DATABASE_URL")
+        if not db_url:
+            print("ERROR: --password or POSTGRES_PASSWORD or DATABASE_URL env var is required")
+            sys.exit(1)
 
     try:
         import psycopg2

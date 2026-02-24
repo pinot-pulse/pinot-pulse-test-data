@@ -1,7 +1,7 @@
 {
   "organization_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
   "organization_name": "Midwest Community Credit Union",
-  "generated_at": "2026-02-24T14:19:02.857857+00:00",
+  "generated_at": "2026-02-24T15:38:01.729356+00:00",
   "datasets": {
     "members": {
       "file": "members.csv",
