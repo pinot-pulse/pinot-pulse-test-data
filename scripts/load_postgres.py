@@ -79,15 +79,16 @@ def main():
          "Advanced operational oversight", '["analytics:read", "reports:*", "fraud:*", "risk:*", "compliance:read", "services:read", "members:read", "audit:read"]'),
     ]
 
+    # role_name references (looked up from DB after role insertion)
     USERS = [
         ("a1b2c3d4-0000-0000-0003-000000000001", "admin@mccu.org", "Sarah", "Mitchell",
-         "Organization Administrator", "Executive", "a1b2c3d4-0000-0000-0002-000000000001"),
+         "Organization Administrator", "Executive", "admin"),
         ("a1b2c3d4-0000-0000-0003-000000000002", "cfo@mccu.org", "Robert", "Kim",
-         "Chief Financial Officer", "Finance", "a1b2c3d4-0000-0000-0002-000000000002"),
+         "Chief Financial Officer", "Finance", "risk_manager"),
         ("a1b2c3d4-0000-0000-0003-000000000003", "analyst@mccu.org", "Maria", "Garcia",
-         "Senior Data Analyst", "Analytics", "a1b2c3d4-0000-0000-0002-000000000003"),
+         "Senior Data Analyst", "Analytics", "analyst"),
         ("a1b2c3d4-0000-0000-0003-000000000004", "viewer@mccu.org", "Tom", "Baker",
-         "Board Member", "Board", "a1b2c3d4-0000-0000-0002-000000000005"),
+         "Board Member", "Board", "viewer"),
     ]
 
     print("═══ Pinot Pulse — PostgreSQL Tenant Loader ═══")
@@ -150,13 +151,22 @@ def main():
                 INSERT INTO auth.roles (id, organization_id, name, display_name,
                     description, permissions, is_system_role, is_active)
                 VALUES (%s, %s, %s, %s, %s, %s::jsonb, false, true)
-                ON CONFLICT (organization_id, name) DO NOTHING
+                ON CONFLICT (name) DO NOTHING
             """, (rid, ORG_ID, rname, rdisplay, rdesc, rperms))
             print(f"  ✓ Role: {rdisplay} ({rname})")
 
+        # ─── Build role name→id lookup from DB (handles backend-seeded roles) ───
+        cur.execute("SELECT id, name FROM auth.roles")
+        role_lookup = {name: rid for rid, name in cur.fetchall()}
+        print(f"  ✓ Found {len(role_lookup)} roles in DB")
+
         # ─── Users ───
         print("\n[5/8] Creating users...")
-        for uid, email, fname, lname, title, dept, role_id in USERS:
+        for uid, email, fname, lname, title, dept, role_name in USERS:
+            actual_role_id = role_lookup.get(role_name)
+            if not actual_role_id:
+                print(f"  ✗ Role '{role_name}' not found in DB — skipping {email}")
+                continue
             cur.execute("""
                 INSERT INTO auth.users (id, organization_id, email, password_hash,
                     first_name, last_name, job_title, department,
@@ -170,8 +180,8 @@ def main():
                 INSERT INTO auth.user_roles (id, user_id, role_id)
                 VALUES (%s, %s, %s)
                 ON CONFLICT (user_id, role_id) DO NOTHING
-            """, (str(uuid.uuid4()), uid, role_id))
-            print(f"  ✓ User: {email} ({title})")
+            """, (str(uuid.uuid4()), uid, actual_role_id))
+            print(f"  ✓ User: {email} ({title}) → role: {role_name}")
 
         conn.commit()
 
@@ -462,35 +472,31 @@ def main():
         conn.commit()
         print(f"  ✓ {alert_count} fraud alerts seeded")
 
-        # ─── Regulatory Config (Filing Records) ───
-        print("\n[12/13] Seeding regulatory filing records...")
+        # ─── Regulatory Config (Compliance Reports) ───
+        print("\n[12/13] Seeding regulatory compliance reports...")
         reg_count = 0
         filing_configs = [
-            ("ncua_5300", "Q4 2025", "NCUA", "accepted", "NCUA-2025-Q4-001"),
-            ("ncua_5300", "Q1 2026", "NCUA", "draft", None),
-            ("bsa_sar", "2025-12", "FinCEN", "submitted", "FINCEN-SAR-2025-042"),
-            ("bsa_ctr", "2025-11", "FinCEN", "accepted", "FINCEN-CTR-2025-118"),
-            ("hmda_lar", "2025-Annual", "CFPB", "submitted", "CFPB-HMDA-2025-001"),
+            ("ncua_5300", "NCUA-2025-Q4-001", "NCUA 5300 Call Report Q4 2025", "accepted", "NCUA", "NCUA-2025-Q4-001"),
+            ("ncua_5300", None, "NCUA 5300 Call Report Q1 2026", "draft", "NCUA", None),
+            ("bsa_sar", "SAR-2025-042", "BSA/AML SAR — Dec 2025", "submitted", "FinCEN", "FINCEN-SAR-2025-042"),
+            ("bsa_ctr", "CTR-2025-118", "BSA/AML CTR — Nov 2025", "accepted", "FinCEN", "FINCEN-CTR-2025-118"),
+            ("hmda_lar", "HMDA-2025-001", "HMDA LAR Annual — 2025", "submitted", "CFPB", "CFPB-HMDA-2025-001"),
         ]
-        for report_type, period, agency, status, conf_num in filing_configs:
+        for report_type, report_number, subject_name, status, filed_with, conf_num in filing_configs:
             cur.execute("""
-                INSERT INTO regulatory.filing_records (
-                    id, organization_id, report_type, period, agency,
-                    status, required_approvals, current_approvals,
-                    validation_passed, confirmation_number, created_by
+                INSERT INTO regulatory.compliance_reports (
+                    id, organization_id, report_type, report_number,
+                    subject_name, status, filed_with, confirmation_number
                 ) VALUES (
-                    %s, %s, %s, %s, %s, %s, 2,
-                    CASE WHEN %s IN ('submitted','accepted','acknowledged') THEN 2 ELSE 0 END,
-                    CASE WHEN %s IN ('submitted','accepted','acknowledged') THEN true ELSE NULL END,
-                    %s, 'system-seed'
+                    %s, %s, %s, %s, %s, %s, %s, %s
                 ) ON CONFLICT (id) DO NOTHING
             """, (
-                str(uuid.uuid4()), ORG_ID, report_type, period, agency,
-                status, status, status, conf_num,
+                str(uuid.uuid4()), ORG_ID, report_type, report_number,
+                subject_name, status, filed_with, conf_num,
             ))
             reg_count += 1
         conn.commit()
-        print(f"  ✓ {reg_count} regulatory filing records seeded")
+        print(f"  ✓ {reg_count} regulatory compliance reports seeded")
 
         # ─── Report Generations ───
         print("\n[13/13] Seeding report generation records...")
